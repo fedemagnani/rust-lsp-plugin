@@ -568,7 +568,7 @@ fn handle_incoming_message(
         .get("method")
         .and_then(Value::as_str)
         .map(str::to_owned);
-    let id = object.get("id").cloned();
+    let id = object.get("id").filter(|v| !v.is_null()).cloned();
 
     match (method, id) {
         (Some(method), Some(id)) => {
