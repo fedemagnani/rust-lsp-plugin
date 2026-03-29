@@ -2,8 +2,8 @@
 
 use crate::{Session, SessionBuilder, SessionError, SessionEvent};
 use serde::Serialize;
-use serde_json::{json, Value};
-use std::collections::VecDeque;
+use serde_json::{Value, json};
+use std::collections::{HashMap, VecDeque};
 use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf, Prefix};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
@@ -54,6 +54,47 @@ pub struct WorkspaceReadyState {
     pub loading_state: WorkspaceLoadingState,
 }
 
+/// File change kind used by `workspace/didChangeWatchedFiles`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WatchedFileChangeKind {
+    /// The file was created.
+    Created = 1,
+    /// The file contents changed.
+    Changed = 2,
+    /// The file was deleted.
+    Deleted = 3,
+}
+
+impl WatchedFileChangeKind {
+    fn as_lsp_kind(self) -> i64 {
+        self as i64
+    }
+}
+
+/// A watched-file change notification entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WatchedFileChange {
+    /// Absolute file-system path for the changed file.
+    pub path: PathBuf,
+    /// Observed change kind.
+    pub kind: WatchedFileChangeKind,
+}
+
+/// Locally tracked state for an open text document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackedDocument {
+    /// Absolute file-system path for the document.
+    pub path: PathBuf,
+    /// File URI sent to the server.
+    pub uri: String,
+    /// Language identifier used when the document was opened.
+    pub language_id: String,
+    /// Most recent synchronized document version.
+    pub version: i32,
+    /// Most recent synchronized document contents.
+    pub text: String,
+}
+
 /// Errors produced by the workspace session layer.
 #[derive(Debug, thiserror::Error)]
 pub enum WorkspaceSessionError {
@@ -77,6 +118,30 @@ pub enum WorkspaceSessionError {
     /// The event receiver was not available when the workspace session was created.
     #[error("workspace session is missing the event receiver")]
     MissingEventReceiver,
+    /// The requested document is not currently open.
+    #[error("document is not open: {path}")]
+    DocumentNotOpen {
+        /// Absolute path for the document.
+        path: PathBuf,
+    },
+    /// The requested document is already open.
+    #[error("document is already open: {path}")]
+    DocumentAlreadyOpen {
+        /// Absolute path for the document.
+        path: PathBuf,
+    },
+    /// A document version must increase monotonically.
+    #[error(
+        "document version must increase for {path}: current={current_version}, new={new_version}"
+    )]
+    NonMonotonicDocumentVersion {
+        /// Absolute path for the document.
+        path: PathBuf,
+        /// Current synchronized version.
+        current_version: i32,
+        /// Proposed new version.
+        new_version: i32,
+    },
 }
 
 /// Builder for a rust-analyzer workspace session with the expected initialization contract.
@@ -210,6 +275,7 @@ impl WorkspaceSessionBuilder {
             ready_timeout: self.ready_timeout,
             ready_state: None,
             loading_state: WorkspaceLoadingState::NotStarted,
+            open_documents: HashMap::new(),
         })
     }
 }
@@ -230,6 +296,7 @@ pub struct WorkspaceSession {
     ready_timeout: Duration,
     ready_state: Option<WorkspaceReadyState>,
     loading_state: WorkspaceLoadingState,
+    open_documents: HashMap<PathBuf, TrackedDocument>,
 }
 
 impl WorkspaceSession {
@@ -258,6 +325,24 @@ impl WorkspaceSession {
         self.ready_state.as_ref()
     }
 
+    /// Returns the tracked state for an open document.
+    pub fn document(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<Option<&TrackedDocument>, WorkspaceSessionError> {
+        self.ensure_ready("document")?;
+        let path = absolutize_path(path.as_ref().to_path_buf())?;
+        Ok(self.open_documents.get(&path))
+    }
+
+    /// Returns all tracked open documents.
+    pub fn open_documents(
+        &self,
+    ) -> Result<impl ExactSizeIterator<Item = &TrackedDocument>, WorkspaceSessionError> {
+        self.ensure_ready("open_documents")?;
+        Ok(self.open_documents.values())
+    }
+
     /// Performs `initialize`, `initialized`, and the immediate startup configuration exchange.
     pub fn initialize(&mut self) -> Result<&WorkspaceReadyState, WorkspaceSessionError> {
         self.ensure_phase("initialize", WorkspaceSessionPhase::PreInitialize)?;
@@ -267,12 +352,11 @@ impl WorkspaceSession {
             let initialize_result = self
                 .session
                 .request("initialize", self.initialize_params())?;
-            let server_capabilities = initialize_result
-                .get("capabilities")
-                .cloned()
-                .ok_or(WorkspaceSessionError::MissingInitializeField {
+            let server_capabilities = initialize_result.get("capabilities").cloned().ok_or(
+                WorkspaceSessionError::MissingInitializeField {
                     field: "capabilities",
-                })?;
+                },
+            )?;
             let server_info = initialize_result.get("serverInfo").cloned();
 
             self.session.notify("initialized", json!({}))?;
@@ -335,6 +419,179 @@ impl WorkspaceSession {
     {
         self.ensure_ready("notify")?;
         Ok(self.session.notify(method, params)?)
+    }
+
+    /// Opens a document and starts synchronizing its contents with the server.
+    pub fn open_document(
+        &mut self,
+        path: impl AsRef<Path>,
+        language_id: impl Into<String>,
+        version: i32,
+        text: impl Into<String>,
+    ) -> Result<&TrackedDocument, WorkspaceSessionError> {
+        self.ensure_ready("open_document")?;
+
+        let path = absolutize_path(path.as_ref().to_path_buf())?;
+        if self.open_documents.contains_key(&path) {
+            return Err(WorkspaceSessionError::DocumentAlreadyOpen { path });
+        }
+
+        let tracked = TrackedDocument {
+            uri: file_uri_from_path(&path),
+            path: path.clone(),
+            language_id: language_id.into(),
+            version,
+            text: text.into(),
+        };
+
+        self.session.notify(
+            "textDocument/didOpen",
+            json!({
+                "textDocument": {
+                    "uri": tracked.uri,
+                    "languageId": tracked.language_id,
+                    "version": tracked.version,
+                    "text": tracked.text,
+                }
+            }),
+        )?;
+
+        self.open_documents.insert(path.clone(), tracked);
+        Ok(self.open_documents.get(&path).expect("document inserted"))
+    }
+
+    /// Applies a full-document text update to an open document.
+    pub fn change_document(
+        &mut self,
+        path: impl AsRef<Path>,
+        version: i32,
+        text: impl Into<String>,
+    ) -> Result<&TrackedDocument, WorkspaceSessionError> {
+        self.ensure_ready("change_document")?;
+
+        let path = absolutize_path(path.as_ref().to_path_buf())?;
+        let tracked = self
+            .open_documents
+            .get_mut(&path)
+            .ok_or_else(|| WorkspaceSessionError::DocumentNotOpen { path: path.clone() })?;
+
+        if version <= tracked.version {
+            return Err(WorkspaceSessionError::NonMonotonicDocumentVersion {
+                path,
+                current_version: tracked.version,
+                new_version: version,
+            });
+        }
+
+        let text = text.into();
+        self.session.notify(
+            "textDocument/didChange",
+            json!({
+                "textDocument": {
+                    "uri": tracked.uri,
+                    "version": version,
+                },
+                "contentChanges": [
+                    {
+                        "text": text,
+                    }
+                ],
+            }),
+        )?;
+
+        tracked.version = version;
+        tracked.text = text;
+        Ok(tracked)
+    }
+
+    /// Notifies the server that an open document was saved.
+    pub fn save_document(
+        &mut self,
+        path: impl AsRef<Path>,
+    ) -> Result<&TrackedDocument, WorkspaceSessionError> {
+        self.ensure_ready("save_document")?;
+
+        let path = absolutize_path(path.as_ref().to_path_buf())?;
+        let tracked = self
+            .open_documents
+            .get(&path)
+            .ok_or_else(|| WorkspaceSessionError::DocumentNotOpen { path: path.clone() })?;
+
+        self.session.notify(
+            "textDocument/didSave",
+            json!({
+                "textDocument": {
+                    "uri": tracked.uri,
+                }
+            }),
+        )?;
+
+        Ok(tracked)
+    }
+
+    /// Stops synchronizing an open document and removes its local tracked state.
+    pub fn close_document(
+        &mut self,
+        path: impl AsRef<Path>,
+    ) -> Result<TrackedDocument, WorkspaceSessionError> {
+        self.ensure_ready("close_document")?;
+
+        let path = absolutize_path(path.as_ref().to_path_buf())?;
+        let tracked = self
+            .open_documents
+            .get(&path)
+            .ok_or_else(|| WorkspaceSessionError::DocumentNotOpen { path: path.clone() })?;
+
+        self.session.notify(
+            "textDocument/didClose",
+            json!({
+                "textDocument": {
+                    "uri": tracked.uri,
+                }
+            }),
+        )?;
+
+        Ok(self
+            .open_documents
+            .remove(&path)
+            .expect("document verified present"))
+    }
+
+    /// Pushes a workspace configuration change notification.
+    pub fn change_configuration(
+        &self,
+        settings: impl Serialize,
+    ) -> Result<(), WorkspaceSessionError> {
+        self.ensure_ready("change_configuration")?;
+        self.session.notify(
+            "workspace/didChangeConfiguration",
+            json!({ "settings": settings }),
+        )?;
+        Ok(())
+    }
+
+    /// Pushes watched-file changes that can affect workspace analysis.
+    pub fn change_watched_files(
+        &self,
+        changes: impl IntoIterator<Item = WatchedFileChange>,
+    ) -> Result<(), WorkspaceSessionError> {
+        self.ensure_ready("change_watched_files")?;
+        let changes = changes
+            .into_iter()
+            .map(|change| {
+                let path = absolutize_path(change.path)?;
+                Ok(json!({
+                    "uri": file_uri_from_path(&path),
+                    "type": change.kind.as_lsp_kind(),
+                }))
+            })
+            .collect::<Result<Vec<_>, SessionError>>()?;
+
+        self.session.notify(
+            "workspace/didChangeWatchedFiles",
+            json!({ "changes": changes }),
+        )?;
+        Ok(())
     }
 
     /// Returns the next buffered event or waits up to the provided timeout for a new one.
@@ -463,6 +720,12 @@ fn default_client_capabilities() -> Value {
             },
         },
         "textDocument": {
+            "synchronization": {
+                "didSave": true,
+                "dynamicRegistration": false,
+                "willSave": false,
+                "willSaveWaitUntil": false,
+            },
             "codeAction": {
                 "codeActionLiteralSupport": {
                     "codeActionKind": {
@@ -540,7 +803,8 @@ fn configuration_response(workspace_configuration: &Value, params: Option<&Value
         .unwrap_or_default();
 
     Value::Array(
-        items.into_iter()
+        items
+            .into_iter()
             .map(|item| {
                 let section = item.get("section").and_then(Value::as_str);
                 lookup_config_section(workspace_configuration, section)
@@ -565,11 +829,53 @@ fn lookup_config_section<'a>(root: &'a Value, section: Option<&str>) -> Option<&
 }
 
 fn absolutize_path(path: PathBuf) -> Result<PathBuf, SessionError> {
-    if path.is_absolute() {
-        Ok(path)
+    let absolute = if path.is_absolute() {
+        path
     } else {
-        Ok(std::env::current_dir()?.join(path))
+        std::env::current_dir()?.join(path)
+    };
+
+    let components = absolute.components().collect::<Vec<_>>();
+
+    for split in (0..=components.len()).rev() {
+        let mut prefix = PathBuf::new();
+        for component in &components[..split] {
+            prefix.push(component.as_os_str());
+        }
+
+        match prefix.canonicalize() {
+            Ok(mut canonical) => {
+                for component in &components[split..] {
+                    canonical.push(component.as_os_str());
+                }
+                return Ok(normalize_path(canonical));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(SessionError::Io(error)),
+        }
     }
+
+    Ok(normalize_path(absolute))
+}
+
+fn normalize_path(path: PathBuf) -> PathBuf {
+    let mut normalized = PathBuf::new();
+
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(Path::new(std::path::MAIN_SEPARATOR_STR)),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() && !path.is_absolute() {
+                    normalized.push("..");
+                }
+            }
+            Component::Normal(segment) => normalized.push(segment),
+        }
+    }
+
+    normalized
 }
 
 fn file_uri_from_path(path: &Path) -> String {
@@ -629,13 +935,9 @@ fn percent_encode(segment: &OsStr) -> String {
     let mut encoded = String::new();
     for byte in bytes.as_bytes() {
         match byte {
-            b'A'..=b'Z'
-            | b'a'..=b'z'
-            | b'0'..=b'9'
-            | b'-'
-            | b'_'
-            | b'.'
-            | b'~' => encoded.push(char::from(*byte)),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(char::from(*byte))
+            }
             _ => encoded.push_str(&format!("%{:02X}", byte)),
         }
     }
