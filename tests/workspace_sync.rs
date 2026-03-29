@@ -94,7 +94,7 @@ fn forwards_workspace_configuration_and_watched_file_changes() -> Result<(), Box
     assert_eq!(state["watched_file_changes"][0]["type"], 2);
     assert_eq!(
         state["watched_file_changes"][0]["uri"],
-        Value::String(path_to_file_uri(&cargo_toml))
+        Value::String(path_to_file_uri(&fs::canonicalize(&cargo_toml)?))
     );
 
     session.shutdown()?;
@@ -159,6 +159,67 @@ fn document_queries_require_ready_phase() -> Result<(), Box<dyn Error>> {
         Ok(_) => panic!("document listing before initialize must fail"),
     }
 
+    remove_temp_workspace(&workspace_root);
+    Ok(())
+}
+
+#[test]
+fn normalizes_dot_segments_for_document_tracking() -> Result<(), Box<dyn Error>> {
+    let workspace_root = create_temp_workspace("sync-normalize");
+    let file_path = workspace_root.join("src").join("lib.rs");
+    fs::create_dir_all(file_path.parent().expect("src dir"))?;
+    fs::write(&file_path, "fn main() {}\n")?;
+
+    let aliased_path = workspace_root
+        .join("src")
+        .join(".")
+        .join("nested")
+        .join("..")
+        .join("lib.rs");
+
+    let mut session = spawn_workspace_session(&workspace_root)?;
+    session.initialize()?;
+    session.open_document(&aliased_path, "rust", 1, "fn main() {}\n")?;
+    session.change_document(&file_path, 2, "fn main() { println!(\"alias\"); }\n")?;
+
+    let tracked = session
+        .document(&file_path)?
+        .expect("tracked document through canonical path");
+    assert_eq!(tracked.version, 2);
+    assert_eq!(tracked.path, fs::canonicalize(&file_path)?);
+
+    session.shutdown()?;
+    remove_temp_workspace(&workspace_root);
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn resolves_symlinked_document_paths_to_the_same_entry() -> Result<(), Box<dyn Error>> {
+    use std::os::unix::fs::symlink;
+
+    let workspace_root = create_temp_workspace("sync-symlink");
+    let real_dir = workspace_root.join("real");
+    let link_dir = workspace_root.join("link");
+    let real_path = real_dir.join("lib.rs");
+    fs::create_dir_all(&real_dir)?;
+    fs::write(&real_path, "fn main() {}\n")?;
+    symlink(&real_dir, &link_dir)?;
+
+    let symlink_path = link_dir.join("lib.rs");
+
+    let mut session = spawn_workspace_session(&workspace_root)?;
+    session.initialize()?;
+    session.open_document(&symlink_path, "rust", 1, "fn main() {}\n")?;
+    session.change_document(&real_path, 2, "fn main() { println!(\"symlink\"); }\n")?;
+
+    let tracked = session
+        .document(&real_path)?
+        .expect("tracked document through real path");
+    assert_eq!(tracked.version, 2);
+    assert_eq!(tracked.path, fs::canonicalize(&real_path)?);
+
+    session.shutdown()?;
     remove_temp_workspace(&workspace_root);
     Ok(())
 }

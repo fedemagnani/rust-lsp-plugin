@@ -69,6 +69,15 @@ fn workspace_session_initializes_and_reaches_ready_state() {
         json!(["utf-8", "utf-16", "utf-32"])
     );
     assert_eq!(
+        state["initialize_params"]["capabilities"]["textDocument"]["synchronization"],
+        json!({
+            "didSave": true,
+            "dynamicRegistration": false,
+            "willSave": false,
+            "willSaveWaitUntil": false
+        })
+    );
+    assert_eq!(
         state["initialize_params"]["capabilities"]["experimental"]["serverStatusNotification"],
         json!(true)
     );

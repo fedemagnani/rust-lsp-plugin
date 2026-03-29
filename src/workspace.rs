@@ -720,6 +720,12 @@ fn default_client_capabilities() -> Value {
             },
         },
         "textDocument": {
+            "synchronization": {
+                "didSave": true,
+                "dynamicRegistration": false,
+                "willSave": false,
+                "willSaveWaitUntil": false,
+            },
             "codeAction": {
                 "codeActionLiteralSupport": {
                     "codeActionKind": {
@@ -823,11 +829,53 @@ fn lookup_config_section<'a>(root: &'a Value, section: Option<&str>) -> Option<&
 }
 
 fn absolutize_path(path: PathBuf) -> Result<PathBuf, SessionError> {
-    if path.is_absolute() {
-        Ok(path)
+    let absolute = if path.is_absolute() {
+        path
     } else {
-        Ok(std::env::current_dir()?.join(path))
+        std::env::current_dir()?.join(path)
+    };
+
+    let components = absolute.components().collect::<Vec<_>>();
+
+    for split in (0..=components.len()).rev() {
+        let mut prefix = PathBuf::new();
+        for component in &components[..split] {
+            prefix.push(component.as_os_str());
+        }
+
+        match prefix.canonicalize() {
+            Ok(mut canonical) => {
+                for component in &components[split..] {
+                    canonical.push(component.as_os_str());
+                }
+                return Ok(normalize_path(canonical));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(SessionError::Io(error)),
+        }
     }
+
+    Ok(normalize_path(absolute))
+}
+
+fn normalize_path(path: PathBuf) -> PathBuf {
+    let mut normalized = PathBuf::new();
+
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(Path::new(std::path::MAIN_SEPARATOR_STR)),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() && !path.is_absolute() {
+                    normalized.push("..");
+                }
+            }
+            Component::Normal(segment) => normalized.push(segment),
+        }
+    }
+
+    normalized
 }
 
 fn file_uri_from_path(path: &Path) -> String {
