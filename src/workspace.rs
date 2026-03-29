@@ -329,7 +329,7 @@ impl WorkspaceSession {
     pub fn document(
         &self,
         path: impl AsRef<Path>,
-    ) -> Result<Option<&TrackedDocument>, SessionError> {
+    ) -> Result<Option<&TrackedDocument>, WorkspaceSessionError> {
         let path = absolutize_path(path.as_ref().to_path_buf())?;
         Ok(self.open_documents.get(&path))
     }
