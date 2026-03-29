@@ -1,15 +1,8 @@
 [package]
 name = "rust-lsp-mcp"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-authors.workspace = true
-license.workspace = true
+edition = "2024"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
-
-[lints]
-workspace = true
