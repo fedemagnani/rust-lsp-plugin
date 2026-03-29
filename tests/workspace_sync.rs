@@ -20,7 +20,7 @@ fn synchronizes_open_change_save_and_close() -> Result<(), Box<dyn Error>> {
     let opened = session.open_document(&file_path, "rust", 1, "fn main() {}\n")?;
     assert_eq!(opened.version, 1);
     assert_eq!(opened.text, "fn main() {}\n");
-    assert_eq!(session.open_documents().len(), 1);
+    assert_eq!(session.open_documents()?.len(), 1);
 
     let changed = session.change_document(&file_path, 2, "fn main() { println!(\"hi\"); }\n")?;
     assert_eq!(changed.version, 2);
@@ -128,6 +128,37 @@ fn rejects_non_monotonic_document_versions() -> Result<(), Box<dyn Error>> {
     }
 
     session.shutdown()?;
+    remove_temp_workspace(&workspace_root);
+    Ok(())
+}
+
+#[test]
+fn document_queries_require_ready_phase() -> Result<(), Box<dyn Error>> {
+    let workspace_root = create_temp_workspace("sync-phase");
+    let file_path = workspace_root.join("main.rs");
+
+    let session = spawn_workspace_session(&workspace_root)?;
+
+    let document_error = session
+        .document(&file_path)
+        .expect_err("document lookup before initialize must fail");
+    assert!(matches!(
+        document_error,
+        WorkspaceSessionError::InvalidPhase {
+            operation: "document",
+            ..
+        }
+    ));
+
+    match session.open_documents() {
+        Err(WorkspaceSessionError::InvalidPhase {
+            operation: "open_documents",
+            ..
+        }) => {}
+        Err(other) => panic!("unexpected error: {other}"),
+        Ok(_) => panic!("document listing before initialize must fail"),
+    }
+
     remove_temp_workspace(&workspace_root);
     Ok(())
 }

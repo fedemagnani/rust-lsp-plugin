@@ -330,13 +330,17 @@ impl WorkspaceSession {
         &self,
         path: impl AsRef<Path>,
     ) -> Result<Option<&TrackedDocument>, WorkspaceSessionError> {
+        self.ensure_ready("document")?;
         let path = absolutize_path(path.as_ref().to_path_buf())?;
         Ok(self.open_documents.get(&path))
     }
 
     /// Returns all tracked open documents.
-    pub fn open_documents(&self) -> impl ExactSizeIterator<Item = &TrackedDocument> {
-        self.open_documents.values()
+    pub fn open_documents(
+        &self,
+    ) -> Result<impl ExactSizeIterator<Item = &TrackedDocument>, WorkspaceSessionError> {
+        self.ensure_ready("open_documents")?;
+        Ok(self.open_documents.values())
     }
 
     /// Performs `initialize`, `initialized`, and the immediate startup configuration exchange.
@@ -547,7 +551,10 @@ impl WorkspaceSession {
             }),
         )?;
 
-        Ok(self.open_documents.remove(&path).expect("document verified present"))
+        Ok(self
+            .open_documents
+            .remove(&path)
+            .expect("document verified present"))
     }
 
     /// Pushes a workspace configuration change notification.
