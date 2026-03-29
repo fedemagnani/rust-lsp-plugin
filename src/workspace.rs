@@ -10,6 +10,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Duration;
 
 const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(1);
+const WORKSPACE_PROGRESS_TOKEN: &str = "rustAnalyzer/workspace";
 
 /// High-level session phase for the LSP initialization lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,6 +19,8 @@ pub enum WorkspaceSessionPhase {
     PreInitialize,
     /// The client is performing the initialize and initialized handshake.
     Initializing,
+    /// Initialization failed and the session can no longer be used safely.
+    Failed,
     /// The workspace completed its startup handshake and can serve later requests.
     Ready,
     /// Shutdown completed and the session is no longer usable.
@@ -287,8 +290,8 @@ impl WorkspaceSession {
                         );
                         self.session.respond(request.id, response)?;
                     }
-                    Some(SessionEvent::Progress { value, .. }) => {
-                        self.update_loading_state(&value);
+                    Some(SessionEvent::Progress { token, value }) => {
+                        self.update_loading_state(&token, &value);
                     }
                     Some(other) => {
                         self.capture_event(other);
@@ -309,7 +312,7 @@ impl WorkspaceSession {
         })();
 
         if result.is_err() {
-            self.phase = WorkspaceSessionPhase::PreInitialize;
+            self.phase = WorkspaceSessionPhase::Failed;
         }
 
         result?;
@@ -394,7 +397,11 @@ impl WorkspaceSession {
         }
     }
 
-    fn update_loading_state(&mut self, progress_value: &Value) {
+    fn update_loading_state(&mut self, token: &Value, progress_value: &Value) {
+        if token != &Value::String(WORKSPACE_PROGRESS_TOKEN.to_owned()) {
+            return;
+        }
+
         match progress_value.get("kind").and_then(Value::as_str) {
             Some("begin") | Some("report") => {
                 let message = progress_value
@@ -411,8 +418,8 @@ impl WorkspaceSession {
     }
 
     fn capture_event(&mut self, event: SessionEvent) {
-        if let SessionEvent::Progress { value, .. } = &event {
-            self.update_loading_state(value);
+        if let SessionEvent::Progress { token, value } = &event {
+            self.update_loading_state(token, value);
         }
         if is_progress_notification(&event) {
             return;

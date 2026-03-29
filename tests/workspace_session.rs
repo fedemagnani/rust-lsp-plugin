@@ -29,6 +29,15 @@ fn spawn_failing_initialized_workspace_session() -> rust_lsp_mcp::WorkspaceSessi
         .expect("spawn workspace session")
 }
 
+fn spawn_workspace_session_with_extra_startup_progress() -> rust_lsp_mcp::WorkspaceSession {
+    let binary = env!("CARGO_BIN_EXE_mock_rust_analyzer");
+    WorkspaceSessionBuilder::new(binary, workspace_root())
+        .env("MOCK_EXTRA_STARTUP_PROGRESS", "1")
+        .ready_timeout(Duration::from_millis(200))
+        .spawn()
+        .expect("spawn workspace session")
+}
+
 #[test]
 fn workspace_session_initializes_and_reaches_ready_state() {
     let mut session = spawn_workspace_session();
@@ -112,6 +121,16 @@ fn workspace_session_buffers_non_handshake_events() {
 }
 
 #[test]
+fn workspace_session_ignores_non_workspace_progress_tokens() {
+    let mut session = spawn_workspace_session_with_extra_startup_progress();
+
+    let ready = session.initialize().expect("initialize workspace").clone();
+
+    assert_eq!(ready.loading_state, WorkspaceLoadingState::Ready);
+    assert_eq!(session.loading_state(), &WorkspaceLoadingState::Ready);
+}
+
+#[test]
 fn workspace_session_rejects_requests_before_initialize() {
     let session = spawn_workspace_session();
 
@@ -128,7 +147,7 @@ fn workspace_session_rejects_requests_before_initialize() {
 }
 
 #[test]
-fn workspace_session_resets_phase_when_initialize_fails() {
+fn workspace_session_enters_failed_phase_when_initialize_fails() {
     let mut session = spawn_failing_initialized_workspace_session();
 
     let error = session
@@ -138,5 +157,16 @@ fn workspace_session_resets_phase_when_initialize_fails() {
         error,
         WorkspaceSessionError::Session(rust_lsp_mcp::SessionError::Disconnected)
     ));
-    assert_eq!(session.phase(), WorkspaceSessionPhase::PreInitialize);
+    assert_eq!(session.phase(), WorkspaceSessionPhase::Failed);
+
+    let retry_error = session
+        .initialize()
+        .expect_err("failed session should reject initialize retries");
+    assert!(matches!(
+        retry_error,
+        WorkspaceSessionError::InvalidPhase {
+            operation: "initialize",
+            phase: WorkspaceSessionPhase::Failed,
+        }
+    ));
 }

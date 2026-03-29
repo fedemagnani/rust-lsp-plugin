@@ -10,6 +10,7 @@ fn main() -> io::Result<()> {
     let fail_shutdown = std::env::var_os("MOCK_SHUTDOWN_FAILURE").is_some();
     let fail_initialized = std::env::var_os("MOCK_INITIALIZED_FAILURE").is_some();
     let hang_on_exit = std::env::var_os("MOCK_HANG_ON_EXIT").is_some();
+    let emit_extra_startup_progress = std::env::var_os("MOCK_EXTRA_STARTUP_PROGRESS").is_some();
 
     let stdin = io::stdin();
     let stdout = io::stdout();
@@ -132,6 +133,22 @@ fn main() -> io::Result<()> {
             (Some("initialized"), None) => {
                 if fail_initialized {
                     break;
+                }
+                if emit_extra_startup_progress {
+                    write_message(
+                        &mut writer,
+                        &json!({
+                            "jsonrpc": "2.0",
+                            "method": "$/progress",
+                            "params": {
+                                "token": "rustAnalyzer/cargo",
+                                "value": {
+                                    "kind": "end",
+                                    "message": "Cargo metadata complete"
+                                }
+                            }
+                        }),
+                    )?;
                 }
                 initialized_received = true;
                 notifications.push("initialized".to_owned());
