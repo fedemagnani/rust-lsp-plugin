@@ -535,7 +535,7 @@ impl WorkspaceSession {
         let path = absolutize_path(path.as_ref().to_path_buf())?;
         let tracked = self
             .open_documents
-            .remove(&path)
+            .get(&path)
             .ok_or_else(|| WorkspaceSessionError::DocumentNotOpen { path: path.clone() })?;
 
         self.session.notify(
@@ -546,6 +546,8 @@ impl WorkspaceSession {
                 }
             }),
         )?;
+
+        Ok(self.open_documents.remove(&path).expect("document verified present"))
 
         Ok(tracked)
     }
