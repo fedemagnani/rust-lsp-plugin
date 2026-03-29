@@ -1,7 +1,11 @@
 //! Workspace-scoped rust-analyzer session management built on top of the JSON-RPC transport.
 
+use crate::lsp::{
+    CompletionContext, CompletionItems, CompletionResponse, DefinitionResponse, DefinitionTarget,
+    DocumentSymbolItem, Hover, Position, PrepareRenameResponse, WorkspaceEdit, WorkspaceSymbolItem,
+};
 use crate::{Session, SessionBuilder, SessionError, SessionEvent};
-use serde::Serialize;
+use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
 use std::ffi::{OsStr, OsString};
@@ -141,6 +145,15 @@ pub enum WorkspaceSessionError {
         current_version: i32,
         /// Proposed new version.
         new_version: i32,
+    },
+    /// A typed LSP response could not be decoded into the expected Rust shape.
+    #[error("invalid typed response for {method}: {source}")]
+    InvalidResponse {
+        /// LSP method whose response failed to decode.
+        method: &'static str,
+        /// Underlying decode error.
+        #[source]
+        source: serde_json::Error,
     },
 }
 
@@ -410,6 +423,118 @@ impl WorkspaceSession {
     {
         self.ensure_ready("request")?;
         Ok(self.session.request(method, params)?)
+    }
+
+    /// Performs `textDocument/hover`.
+    pub fn hover(
+        &self,
+        path: impl AsRef<Path>,
+        position: Position,
+    ) -> Result<Option<Hover>, WorkspaceSessionError> {
+        self.typed_request(
+            "textDocument/hover",
+            document_position_params(self.document_uri(path)?, position),
+        )
+    }
+
+    /// Performs `textDocument/completion`.
+    pub fn completion(
+        &self,
+        path: impl AsRef<Path>,
+        position: Position,
+        context: Option<CompletionContext>,
+    ) -> Result<Option<CompletionItems>, WorkspaceSessionError> {
+        let response: Option<CompletionResponse> = self.typed_request(
+            "textDocument/completion",
+            completion_params(self.document_uri(path)?, position, context),
+        )?;
+        Ok(response.map(CompletionResponse::into_completion_items))
+    }
+
+    /// Performs `textDocument/definition`.
+    pub fn goto_definition(
+        &self,
+        path: impl AsRef<Path>,
+        position: Position,
+    ) -> Result<Vec<DefinitionTarget>, WorkspaceSessionError> {
+        let response: Option<DefinitionResponse> = self.typed_request(
+            "textDocument/definition",
+            document_position_params(self.document_uri(path)?, position),
+        )?;
+        Ok(response
+            .map(DefinitionResponse::into_targets)
+            .unwrap_or_default())
+    }
+
+    /// Performs `textDocument/references`.
+    pub fn references(
+        &self,
+        path: impl AsRef<Path>,
+        position: Position,
+        include_declaration: bool,
+    ) -> Result<Vec<crate::lsp::Location>, WorkspaceSessionError> {
+        let response: Option<Vec<crate::lsp::Location>> = self.typed_request(
+            "textDocument/references",
+            json!({
+                "textDocument": { "uri": self.document_uri(path)? },
+                "position": position,
+                "context": { "includeDeclaration": include_declaration },
+            }),
+        )?;
+        Ok(response.unwrap_or_default())
+    }
+
+    /// Performs `textDocument/prepareRename`.
+    pub fn prepare_rename(
+        &self,
+        path: impl AsRef<Path>,
+        position: Position,
+    ) -> Result<Option<PrepareRenameResponse>, WorkspaceSessionError> {
+        self.typed_request(
+            "textDocument/prepareRename",
+            document_position_params(self.document_uri(path)?, position),
+        )
+    }
+
+    /// Performs `textDocument/rename`.
+    pub fn rename(
+        &self,
+        path: impl AsRef<Path>,
+        position: Position,
+        new_name: impl Into<String>,
+    ) -> Result<WorkspaceEdit, WorkspaceSessionError> {
+        self.typed_request(
+            "textDocument/rename",
+            json!({
+                "textDocument": { "uri": self.document_uri(path)? },
+                "position": position,
+                "newName": new_name.into(),
+            }),
+        )
+    }
+
+    /// Performs `textDocument/documentSymbol`.
+    pub fn document_symbols(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<Vec<DocumentSymbolItem>, WorkspaceSessionError> {
+        let response: Option<Vec<DocumentSymbolItem>> = self.typed_request(
+            "textDocument/documentSymbol",
+            json!({
+                "textDocument": { "uri": self.document_uri(path)? },
+            }),
+        )?;
+        Ok(response.unwrap_or_default())
+    }
+
+    /// Performs `workspace/symbol`.
+    pub fn workspace_symbols(
+        &self,
+        query: impl Into<String>,
+    ) -> Result<Vec<WorkspaceSymbolItem>, WorkspaceSessionError> {
+        let response: Vec<WorkspaceSymbolItem> =
+            self.typed_request("workspace/symbol", json!({ "query": query.into() }))?;
+        Ok(response)
     }
 
     /// Sends a notification after the session reaches the ready phase.
@@ -702,6 +827,47 @@ impl WorkspaceSession {
     fn ensure_ready(&self, operation: &'static str) -> Result<(), WorkspaceSessionError> {
         self.ensure_phase(operation, WorkspaceSessionPhase::Ready)
     }
+
+    fn document_uri(&self, path: impl AsRef<Path>) -> Result<String, WorkspaceSessionError> {
+        let path = absolutize_path(path.as_ref().to_path_buf())?;
+        Ok(self
+            .open_documents
+            .get(&path)
+            .map(|document| document.uri.clone())
+            .unwrap_or_else(|| file_uri_from_path(&path)))
+    }
+
+    fn typed_request<R, P>(
+        &self,
+        method: &'static str,
+        params: P,
+    ) -> Result<R, WorkspaceSessionError>
+    where
+        R: DeserializeOwned,
+        P: Serialize,
+    {
+        let response = self.request(method, params)?;
+        serde_json::from_value(response)
+            .map_err(|source| WorkspaceSessionError::InvalidResponse { method, source })
+    }
+}
+
+fn completion_params(uri: String, position: Position, context: Option<CompletionContext>) -> Value {
+    let mut params = json!({
+        "textDocument": { "uri": uri },
+        "position": position,
+    });
+    if let Some(context) = context {
+        params["context"] = serde_json::to_value(context).expect("completion context serializes");
+    }
+    params
+}
+
+fn document_position_params(uri: String, position: Position) -> Value {
+    json!({
+        "textDocument": { "uri": uri },
+        "position": position,
+    })
 }
 
 fn default_client_capabilities() -> Value {
