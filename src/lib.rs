@@ -7,6 +7,7 @@ pub use session::{
     JsonRpcId, ResponseError, ServerRequest, Session, SessionBuilder, SessionError, SessionEvent,
 };
 pub use workspace::{
-    WorkspaceLoadingState, WorkspaceReadyState, WorkspaceSession, WorkspaceSessionBuilder,
-    WorkspaceSessionError, WorkspaceSessionPhase,
+    TrackedDocument, WatchedFileChange, WatchedFileChangeKind, WorkspaceLoadingState,
+    WorkspaceReadyState, WorkspaceSession, WorkspaceSessionBuilder, WorkspaceSessionError,
+    WorkspaceSessionPhase,
 };

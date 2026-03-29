@@ -1,7 +1,7 @@
 //! Session runtime for stdio-backed JSON-RPC servers such as `rust-analyzer`.
 
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
@@ -511,10 +511,7 @@ fn wait_for_child_exit_or_kill(
     Ok((status, true))
 }
 
-fn wait_for_child_exit(
-    child: &mut Child,
-    timeout: Duration,
-) -> io::Result<Option<ExitStatus>> {
+fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> io::Result<Option<ExitStatus>> {
     let start = Instant::now();
 
     loop {
