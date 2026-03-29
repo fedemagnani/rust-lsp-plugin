@@ -8,10 +8,9 @@ use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvError, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, RecvError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
 
 /// JSON-RPC request identifier.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -97,14 +96,6 @@ pub enum SessionError {
     /// The peer answered a request with a JSON-RPC error object.
     #[error("json-rpc request failed: {0:?}")]
     ServerError(ResponseError),
-    /// A request exceeded its configured response deadline.
-    #[error("request timed out after {timeout:?}: {method}")]
-    RequestTimeout {
-        /// The JSON-RPC method that timed out.
-        method: String,
-        /// The configured timeout that elapsed.
-        timeout: Duration,
-    },
     /// The child process or transport disconnected before completion.
     #[error("session disconnected")]
     Disconnected,
@@ -123,7 +114,6 @@ pub struct SessionBuilder {
     args: Vec<OsString>,
     current_dir: Option<PathBuf>,
     envs: Vec<(OsString, OsString)>,
-    request_timeout: Option<Duration>,
 }
 
 impl SessionBuilder {
@@ -162,12 +152,6 @@ impl SessionBuilder {
     pub fn env(mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> Self {
         self.envs
             .push((key.as_ref().to_os_string(), value.as_ref().to_os_string()));
-        self
-    }
-
-    /// Sets the default timeout applied to `request`.
-    pub fn request_timeout(mut self, timeout: Duration) -> Self {
-        self.request_timeout = Some(timeout);
         self
     }
 
@@ -222,7 +206,6 @@ impl SessionBuilder {
             reader_handle: Mutex::new(Some(reader_handle)),
             stderr_handle: Mutex::new(Some(stderr_handle)),
             terminated,
-            request_timeout: self.request_timeout,
             shutdown_sent: AtomicBool::new(false),
         })
     }
@@ -240,7 +223,6 @@ pub struct Session {
     reader_handle: Mutex<Option<JoinHandle<()>>>,
     stderr_handle: Mutex<Option<JoinHandle<()>>>,
     terminated: Arc<AtomicBool>,
-    request_timeout: Option<Duration>,
     shutdown_sent: AtomicBool,
 }
 
@@ -258,31 +240,6 @@ impl Session {
     where
         P: Serialize,
     {
-        self.request_inner(method, params, self.request_timeout)
-    }
-
-    /// Sends a JSON-RPC request using a per-call timeout override.
-    pub fn request_with_timeout<P>(
-        &self,
-        method: &str,
-        params: P,
-        timeout: Duration,
-    ) -> Result<Value, SessionError>
-    where
-        P: Serialize,
-    {
-        self.request_inner(method, params, Some(timeout))
-    }
-
-    fn request_inner<P>(
-        &self,
-        method: &str,
-        params: P,
-        timeout: Option<Duration>,
-    ) -> Result<Value, SessionError>
-    where
-        P: Serialize,
-    {
         let request_id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let jsonrpc_id = JsonRpcId::from_outgoing(request_id)?;
         let params = serde_json::to_value(params)?;
@@ -294,13 +251,10 @@ impl Session {
         });
 
         let (tx, rx) = mpsc::channel();
-        {
-            let mut pending = self.pending.lock().expect("pending map poisoned");
-            if self.terminated.load(Ordering::SeqCst) {
-                return Err(SessionError::Disconnected);
-            }
-            pending.insert(request_id, tx);
-        }
+        self.pending
+            .lock()
+            .expect("pending map poisoned")
+            .insert(request_id, tx);
 
         if let Err(error) = self.write_message(&message) {
             self.pending
@@ -310,23 +264,7 @@ impl Session {
             return Err(error);
         }
 
-        match timeout {
-            Some(timeout) => match rx.recv_timeout(timeout) {
-                Ok(result) => result,
-                Err(RecvTimeoutError::Timeout) => {
-                    self.pending
-                        .lock()
-                        .expect("pending map poisoned")
-                        .remove(&request_id);
-                    Err(SessionError::RequestTimeout {
-                        method: method.to_owned(),
-                        timeout,
-                    })
-                }
-                Err(RecvTimeoutError::Disconnected) => Err(SessionError::Disconnected),
-            },
-            None => rx.recv()?,
-        }
+        rx.recv()?
     }
 
     /// Sends a JSON-RPC notification.
@@ -393,17 +331,9 @@ impl Session {
             return Ok(());
         }
 
-        let result = (|| {
-            self.request("shutdown", Value::Null)?;
-            self.notify("exit", Value::Null)?;
-            self.finish_process()
-        })();
-
-        if result.is_err() {
-            self.shutdown_sent.store(false, Ordering::SeqCst);
-        }
-
-        result
+        self.request("shutdown", Value::Null)?;
+        self.notify("exit", Value::Null)?;
+        self.finish_process()
     }
 
     fn write_message(&self, message: &Value) -> Result<(), SessionError> {
@@ -492,19 +422,19 @@ fn spawn_stdout_thread(
             match read_message(&mut reader) {
                 Ok(Some(message)) => {
                     if let Err(error) = handle_incoming_message(message, &pending, &event_tx) {
-                        terminated.store(true, Ordering::SeqCst);
                         close_pending(&pending, error);
+                        terminated.store(true, Ordering::SeqCst);
                         break;
                     }
                 }
                 Ok(None) => {
-                    terminated.store(true, Ordering::SeqCst);
                     close_pending(&pending, SessionError::Disconnected);
+                    terminated.store(true, Ordering::SeqCst);
                     break;
                 }
                 Err(error) => {
-                    terminated.store(true, Ordering::SeqCst);
                     close_pending(&pending, error);
+                    terminated.store(true, Ordering::SeqCst);
                     break;
                 }
             }
@@ -546,10 +476,6 @@ fn close_pending(pending: &PendingMap, error: SessionError) {
             SessionError::Json(inner) => SessionError::Protocol(inner.to_string()),
             SessionError::Protocol(message) => SessionError::Protocol(message.clone()),
             SessionError::ServerError(server) => SessionError::ServerError(server.clone()),
-            SessionError::RequestTimeout { method, timeout } => SessionError::RequestTimeout {
-                method: method.clone(),
-                timeout: *timeout,
-            },
             SessionError::Disconnected => SessionError::Disconnected,
         }));
     }
@@ -568,7 +494,7 @@ fn handle_incoming_message(
         .get("method")
         .and_then(Value::as_str)
         .map(str::to_owned);
-    let id = object.get("id").filter(|v| !v.is_null()).cloned();
+    let id = object.get("id").cloned();
 
     match (method, id) {
         (Some(method), Some(id)) => {

@@ -7,7 +7,6 @@ use std::time::Duration;
 
 fn main() -> io::Result<()> {
     eprintln!("mock-rust-analyzer: ready");
-    let fail_shutdown = std::env::var_os("MOCK_SHUTDOWN_FAILURE").is_some();
 
     let stdin = io::stdin();
     let stdout = io::stdout();
@@ -23,18 +22,6 @@ fn main() -> io::Result<()> {
 
         match (method, id) {
             (Some("ping"), Some(id)) => {
-                let params = message.get("params").cloned().unwrap_or(Value::Null);
-                write_message(
-                    &mut writer,
-                    &json!({
-                        "jsonrpc": "2.0",
-                        "id": id,
-                        "result": { "echo": params }
-                    }),
-                )?;
-            }
-            (Some("slow_ping"), Some(id)) => {
-                thread::sleep(Duration::from_millis(200));
                 let params = message.get("params").cloned().unwrap_or(Value::Null);
                 write_message(
                     &mut writer,
@@ -79,10 +66,6 @@ fn main() -> io::Result<()> {
                 )?;
             }
             (Some("shutdown"), Some(id)) => {
-                if fail_shutdown {
-                    let _ = id;
-                    break;
-                }
                 shutdown_requested = true;
                 write_message(
                     &mut writer,
