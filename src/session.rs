@@ -473,7 +473,8 @@ impl Drop for Session {
         close_pending(&self.pending, SessionError::Disconnected);
 
         if let Ok(mut child) = self.child.lock() {
-            let _ = wait_for_child_exit_or_kill(&mut child, self.shutdown_timeout);
+            let _ = child.kill();
+            let _ = child.wait();
         }
 
         join_transport_threads(&self.reader_handle, &self.stderr_handle);
