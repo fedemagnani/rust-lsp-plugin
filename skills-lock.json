@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "skills": {
+    "ask-deepwiki": {
+      "source": "fedemagnani/harness-eng-skills",
+      "sourceType": "github",
+      "computedHash": "b3a5630ad3251d088cb5c2ef5a12d357825d1d60995a6b18ec9e88d3a11a0444"
+    },
+    "ask-questions-if-underspecified": {
+      "source": "fedemagnani/harness-eng-skills",
+      "sourceType": "github",
+      "computedHash": "7178ae6d25b054d311eee5abf947bc988e79d5ea0ae1d349f32d7a490493f525"
+    },
+    "github-harness": {
+      "source": "fedemagnani/harness-eng-skills",
+      "sourceType": "github",
+      "computedHash": "84befc8900a5c92c392212b4437deff461105c8c48ef9cccf8b4dd6ec616eccc"
+    }
+  }
+}

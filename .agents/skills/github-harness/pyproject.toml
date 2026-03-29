@@ -1,0 +1,14 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "github-harness"
+version = "0.1.0"
+description = "Repository-scoped GitHub command harness for planning and delivery"
+readme = "SKILL.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/github_harness"]
