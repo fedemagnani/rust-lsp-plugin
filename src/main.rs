@@ -1,3 +1,3 @@
-fn main() {
-    println!("Hello, world!");
-}
+#![allow(missing_docs)]
+
+fn main() {}
