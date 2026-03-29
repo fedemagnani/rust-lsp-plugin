@@ -1,10 +1,14 @@
 //! Session runtime for stdio-backed JSON-RPC servers such as `rust-analyzer`.
 
+use lsp_server::{
+    Message, Notification, Request, RequestId as LspRequestId, Response,
+    ResponseError as LspResponseError,
+};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
-use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::io::{self, BufRead, BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -30,6 +34,21 @@ impl JsonRpcId {
         let id =
             i64::try_from(id).map_err(|_| SessionError::Protocol("request id overflow".into()))?;
         Ok(Self::Integer(id))
+    }
+
+    fn into_lsp(self) -> Result<LspRequestId, SessionError> {
+        match self {
+            Self::Integer(id) => {
+                let id = i32::try_from(id)
+                    .map_err(|_| SessionError::Protocol("request id overflow".into()))?;
+                Ok(LspRequestId::from(id))
+            }
+            Self::String(id) => Ok(LspRequestId::from(id)),
+        }
+    }
+
+    fn from_lsp(id: LspRequestId) -> Result<Self, SessionError> {
+        serde_json::from_value(serde_json::to_value(id)?).map_err(SessionError::Json)
     }
 }
 
@@ -304,14 +323,11 @@ impl Session {
         P: Serialize,
     {
         let request_id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        let jsonrpc_id = JsonRpcId::from_outgoing(request_id)?;
-        let params = serde_json::to_value(params)?;
-        let message = json!({
-            "jsonrpc": "2.0",
-            "id": jsonrpc_id,
-            "method": method,
-            "params": params,
-        });
+        let message = Message::Request(Request::new(
+            JsonRpcId::from_outgoing(request_id)?.into_lsp()?,
+            method.to_owned(),
+            params,
+        ));
 
         let (tx, rx) = mpsc::channel();
         {
@@ -354,12 +370,7 @@ impl Session {
     where
         P: Serialize,
     {
-        let params = serde_json::to_value(params)?;
-        let message = json!({
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params,
-        });
+        let message = Message::Notification(Notification::new(method.to_owned(), params));
         self.write_message(&message)
     }
 
@@ -368,12 +379,7 @@ impl Session {
     where
         R: Serialize,
     {
-        let result = serde_json::to_value(result)?;
-        let message = json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": result,
-        });
+        let message = Message::Response(Response::new_ok(id.into_lsp()?, result));
         self.write_message(&message)
     }
 
@@ -385,20 +391,19 @@ impl Session {
         message: impl Into<String>,
         data: Option<Value>,
     ) -> Result<(), SessionError> {
-        let mut error = json!({
-            "code": code,
-            "message": message.into(),
-        });
-
+        let mut response = Response::new_err(
+            id.into_lsp()?,
+            i32::try_from(code)
+                .map_err(|_| SessionError::Protocol("response error code overflow".into()))?,
+            message.into(),
+        );
         if let Some(data) = data {
-            error["data"] = data;
+            response.error = Some(LspResponseError {
+                data: Some(data),
+                ..response.error.expect("new_err sets error")
+            });
         }
-
-        let message = json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "error": error,
-        });
+        let message = Message::Response(response);
         self.write_message(&message)
     }
 
@@ -426,16 +431,13 @@ impl Session {
         result
     }
 
-    fn write_message(&self, message: &Value) -> Result<(), SessionError> {
+    fn write_message(&self, message: &Message) -> Result<(), SessionError> {
         if self.terminated.load(Ordering::SeqCst) {
             return Err(SessionError::Disconnected);
         }
 
-        let body = serde_json::to_vec(message)?;
         let mut writer = self.writer.lock().expect("writer poisoned");
-        write!(writer, "Content-Length: {}\r\n\r\n", body.len())?;
-        writer.write_all(&body)?;
-        writer.flush()?;
+        message.write(&mut *writer)?;
         Ok(())
     }
 
@@ -537,7 +539,7 @@ fn spawn_stdout_thread(
         let mut reader = BufReader::new(stdout);
 
         loop {
-            match read_message(&mut reader) {
+            match Message::read(&mut reader) {
                 Ok(Some(message)) => {
                     if let Err(error) = handle_incoming_message(message, &pending, &event_tx) {
                         terminated.store(true, Ordering::SeqCst);
@@ -552,7 +554,7 @@ fn spawn_stdout_thread(
                 }
                 Err(error) => {
                     terminated.store(true, Ordering::SeqCst);
-                    close_pending(&pending, error);
+                    close_pending(&pending, SessionError::Io(error));
                     break;
                 }
             }
@@ -607,34 +609,24 @@ fn close_pending(pending: &PendingMap, error: SessionError) {
 }
 
 fn handle_incoming_message(
-    message: Value,
+    message: Message,
     pending: &PendingMap,
     event_tx: &Sender<SessionEvent>,
 ) -> Result<(), SessionError> {
-    let object = message
-        .as_object()
-        .ok_or_else(|| SessionError::Protocol("incoming message must be a JSON object".into()))?;
-
-    let method = object
-        .get("method")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    let id = object.get("id").filter(|v| !v.is_null()).cloned();
-
-    match (method, id) {
-        (Some(method), Some(id)) => {
-            let id = parse_jsonrpc_id(&id)?;
+    match message {
+        Message::Request(request) => {
             let request = ServerRequest {
-                id,
-                method,
-                params: object.get("params").cloned(),
+                id: JsonRpcId::from_lsp(request.id)?,
+                method: request.method,
+                params: Some(request.params),
             };
             event_tx
                 .send(SessionEvent::ServerRequest(request))
                 .map_err(|_| SessionError::Disconnected)
         }
-        (Some(method), None) => {
-            let params = object.get("params").cloned();
+        Message::Notification(notification) => {
+            let method = notification.method;
+            let params = Some(notification.params);
             if method == "$/progress" {
                 let params_value = params.clone().ok_or_else(|| {
                     SessionError::Protocol("progress notification missing params".into())
@@ -654,103 +646,35 @@ fn handle_incoming_message(
                 .send(SessionEvent::Notification { method, params })
                 .map_err(|_| SessionError::Disconnected)
         }
-        (None, Some(id)) => {
-            let id = parse_outgoing_response_id(&id)?;
-            let response = if let Some(result) = object.get("result") {
-                Ok(result.clone())
-            } else if let Some(error) = object.get("error") {
-                Err(SessionError::ServerError(parse_response_error(error)?))
+        Message::Response(response) => {
+            let id = parse_outgoing_response_id(&response.id)?;
+            let result = if let Some(error) = response.error {
+                Err(SessionError::ServerError(parse_response_error(error)))
             } else {
-                Err(SessionError::Protocol(
-                    "response missing result or error".into(),
-                ))
+                Ok(response.result.unwrap_or(Value::Null))
             };
 
             if let Some(sender) = pending.lock().expect("pending map poisoned").remove(&id) {
-                let _ = sender.send(response);
+                let _ = sender.send(result);
             }
             Ok(())
         }
-        (None, None) => Err(SessionError::Protocol(
-            "incoming message missing both method and id".into(),
-        )),
     }
 }
 
-fn parse_response_error(value: &Value) -> Result<ResponseError, SessionError> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| SessionError::Protocol("response error must be an object".into()))?;
-    let code = object
-        .get("code")
-        .and_then(Value::as_i64)
-        .ok_or_else(|| SessionError::Protocol("response error missing numeric code".into()))?;
-    let message = object
-        .get("message")
-        .and_then(Value::as_str)
-        .ok_or_else(|| SessionError::Protocol("response error missing message".into()))?
-        .to_owned();
-    let data = object.get("data").cloned();
-
-    Ok(ResponseError {
-        code,
-        message,
-        data,
-    })
+fn parse_response_error(error: LspResponseError) -> ResponseError {
+    ResponseError {
+        code: i64::from(error.code),
+        message: error.message,
+        data: error.data,
+    }
 }
 
-fn parse_outgoing_response_id(id: &Value) -> Result<u64, SessionError> {
-    let number = id
+fn parse_outgoing_response_id(id: &LspRequestId) -> Result<u64, SessionError> {
+    let value = serde_json::to_value(id)?;
+    let number = value
         .as_i64()
         .ok_or_else(|| SessionError::Protocol("response id must be an integer".into()))?;
     u64::try_from(number)
         .map_err(|_| SessionError::Protocol("response id must be non-negative".into()))
-}
-
-fn parse_jsonrpc_id(id: &Value) -> Result<JsonRpcId, SessionError> {
-    if let Some(number) = id.as_i64() {
-        return Ok(JsonRpcId::Integer(number));
-    }
-    if let Some(string) = id.as_str() {
-        return Ok(JsonRpcId::String(string.to_owned()));
-    }
-    Err(SessionError::Protocol(
-        "json-rpc id must be an integer or string".into(),
-    ))
-}
-
-fn read_message(reader: &mut impl BufRead) -> Result<Option<Value>, SessionError> {
-    let mut content_length = None;
-
-    loop {
-        let mut line = String::new();
-        let bytes = reader.read_line(&mut line)?;
-
-        if bytes == 0 {
-            return Ok(None);
-        }
-
-        if line == "\r\n" {
-            break;
-        }
-
-        let (name, value) = line
-            .split_once(':')
-            .ok_or_else(|| SessionError::Protocol(format!("malformed header line: {line:?}")))?;
-
-        if name.eq_ignore_ascii_case("content-length") {
-            let parsed = value
-                .trim()
-                .parse::<usize>()
-                .map_err(|_| SessionError::Protocol("invalid content length header".into()))?;
-            content_length = Some(parsed);
-        }
-    }
-
-    let content_length = content_length
-        .ok_or_else(|| SessionError::Protocol("missing Content-Length header".into()))?;
-    let mut body = vec![0; content_length];
-    reader.read_exact(&mut body)?;
-
-    Ok(Some(serde_json::from_slice(&body)?))
 }

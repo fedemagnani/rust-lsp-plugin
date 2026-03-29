@@ -1,6 +1,7 @@
 use rust_lsp_mcp::{
-    CompletionContext, DefinitionTarget, DocumentSymbolItem, HoverContents, MarkupKind, Position,
-    PrepareRenameResponse, WorkspaceSessionBuilder, WorkspaceSymbolItem,
+    CompletionContext, CompletionResponse, CompletionTriggerKind, DocumentSymbolResponse,
+    GotoDefinitionResponse, HoverContents, MarkupKind, OneOf, Position, PrepareRenameResponse,
+    SymbolKind, WorkspaceSessionBuilder, WorkspaceSymbolResponse,
 };
 use std::error::Error;
 use std::fs;
@@ -46,14 +47,20 @@ fn exposes_typed_core_lsp_requests() -> Result<(), Box<dyn Error>> {
                 character: 4,
             },
             Some(CompletionContext {
-                trigger_kind: 1,
+                trigger_kind: CompletionTriggerKind::INVOKED,
                 trigger_character: None,
             }),
         )?
         .expect("completion result");
-    assert!(!completions.is_incomplete);
-    assert_eq!(completions.items.len(), 1);
-    assert_eq!(completions.items[0].label, "answer");
+    let completions = match completions {
+        CompletionResponse::Array(items) => items,
+        CompletionResponse::List(list) => {
+            assert!(!list.is_incomplete);
+            list.items
+        }
+    };
+    assert_eq!(completions.len(), 1);
+    assert_eq!(completions[0].label, "answer");
 
     let definitions = session.goto_definition(
         &file_path,
@@ -62,11 +69,14 @@ fn exposes_typed_core_lsp_requests() -> Result<(), Box<dyn Error>> {
             character: 4,
         },
     )?;
-    assert_eq!(definitions.len(), 1);
-    match &definitions[0] {
-        DefinitionTarget::Location(location) => {
-            assert!(location.uri.ends_with("/src/lib.rs"));
+    match definitions.expect("definition result") {
+        GotoDefinitionResponse::Scalar(location) => {
+            assert!(location.uri.as_str().ends_with("/src/lib.rs"));
             assert_eq!(location.range.start.line, 1);
+        }
+        GotoDefinitionResponse::Array(locations) => {
+            assert_eq!(locations.len(), 1);
+            assert!(locations[0].uri.as_str().ends_with("/src/lib.rs"));
         }
         other => panic!("unexpected definition target: {other:?}"),
     }
@@ -79,11 +89,12 @@ fn exposes_typed_core_lsp_requests() -> Result<(), Box<dyn Error>> {
         },
         true,
     )?;
+    let references = references.expect("references result");
     assert_eq!(references.len(), 2);
     assert!(
         references
             .iter()
-            .all(|reference| reference.uri.ends_with("/src/lib.rs"))
+            .all(|reference| reference.uri.as_str().ends_with("/src/lib.rs"))
     );
 
     let rename = session
@@ -103,42 +114,57 @@ fn exposes_typed_core_lsp_requests() -> Result<(), Box<dyn Error>> {
         other => panic!("unexpected prepare rename result: {other:?}"),
     }
 
-    let edit = session.rename(
+    let edit = session
+        .rename(
         &file_path,
         Position {
             line: 5,
             character: 4,
         },
         "meaning",
-    )?;
+    )?
+        .expect("rename edit");
     let changes = edit.changes.expect("rename changes");
-    let file_uri = session
-        .document(&file_path)?
-        .expect("tracked document")
-        .uri
-        .clone();
-    let edits = changes.get(&file_uri).expect("edits for file");
+    let file_uri = session.document(&file_path)?.expect("tracked document").uri.clone();
+    let edits = changes.get(&file_uri.parse()?).expect("edits for file");
     assert_eq!(edits.len(), 1);
     assert_eq!(edits[0].new_text, "meaning");
 
-    let document_symbols = session.document_symbols(&file_path)?;
-    assert_eq!(document_symbols.len(), 1);
-    match &document_symbols[0] {
-        DocumentSymbolItem::DocumentSymbol(symbol) => {
+    let document_symbols = session
+        .document_symbols(&file_path)?
+        .expect("document symbols");
+    match document_symbols {
+        DocumentSymbolResponse::Nested(symbols) => {
+            assert_eq!(symbols.len(), 1);
+            let symbol = &symbols[0];
             assert_eq!(symbol.name, "answer");
-            assert_eq!(symbol.kind, 12);
+            assert_eq!(symbol.kind, SymbolKind::FUNCTION);
         }
         other => panic!("unexpected document symbol: {other:?}"),
     }
 
-    let workspace_symbols = session.workspace_symbols("answer")?;
-    assert_eq!(workspace_symbols.len(), 1);
-    match &workspace_symbols[0] {
-        WorkspaceSymbolItem::WorkspaceSymbol(symbol) => {
+    let workspace_symbols = session
+        .workspace_symbols("answer")?
+        .expect("workspace symbols");
+    match workspace_symbols {
+        WorkspaceSymbolResponse::Nested(symbols) => {
+            assert_eq!(symbols.len(), 1);
+            let symbol = &symbols[0];
             assert_eq!(symbol.name, "answer");
             assert_eq!(symbol.container_name.as_deref(), Some("crate"));
+            match &symbol.location {
+                OneOf::Left(location) => assert!(location.uri.as_str().contains("/workspace/")),
+                other => panic!("unexpected workspace symbol location: {other:?}"),
+            }
         }
-        other => panic!("unexpected workspace symbol: {other:?}"),
+        WorkspaceSymbolResponse::Flat(symbols) => {
+            assert_eq!(symbols.len(), 1);
+            let symbol = &symbols[0];
+            assert_eq!(symbol.name, "answer");
+            assert_eq!(symbol.kind, SymbolKind::FUNCTION);
+            assert_eq!(symbol.container_name.as_deref(), Some("crate"));
+            assert!(symbol.location.uri.as_str().contains("/workspace/"));
+        }
     }
 
     session.shutdown()?;
