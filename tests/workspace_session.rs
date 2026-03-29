@@ -48,7 +48,10 @@ fn workspace_session_initializes_and_reaches_ready_state() {
 
     assert_eq!(session.phase(), WorkspaceSessionPhase::Ready);
     assert_eq!(ready.server_capabilities["hoverProvider"], json!(true));
-    assert_eq!(ready.server_capabilities["positionEncoding"], json!("utf-8"));
+    assert_eq!(
+        ready.server_capabilities["positionEncoding"],
+        json!("utf-8")
+    );
     assert_eq!(
         ready.server_info.as_ref().expect("server info")["name"],
         json!("mock-rust-analyzer")
@@ -57,7 +60,9 @@ fn workspace_session_initializes_and_reaches_ready_state() {
     assert_eq!(ready.loading_state, WorkspaceLoadingState::Ready);
     assert_eq!(session.loading_state(), &WorkspaceLoadingState::Ready);
 
-    let state = session.request("state", json!(null)).expect("state request");
+    let state = session
+        .request("state", json!(null))
+        .expect("state request");
     assert_eq!(state["initialized_received"], json!(true));
     assert_eq!(
         state["initialize_params"]["capabilities"]["general"]["positionEncodings"],
@@ -114,7 +119,10 @@ fn workspace_session_buffers_non_handshake_events() {
     {
         Some(SessionEvent::Progress { token, value }) => {
             assert_eq!(token, json!("mock-progress"));
-            assert_eq!(value["message"], json!("saw:workspace/didChangeConfiguration"));
+            assert_eq!(
+                value["message"],
+                json!("saw:workspace/didChangeConfiguration")
+            );
         }
         other => panic!("unexpected event: {other:?}"),
     }

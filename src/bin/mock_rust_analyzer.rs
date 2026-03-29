@@ -1,6 +1,7 @@
 #![allow(missing_docs)]
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::io::{self, BufRead, BufReader, Write};
 use std::thread;
 use std::time::Duration;
@@ -18,6 +19,10 @@ fn main() -> io::Result<()> {
     let mut writer = stdout.lock();
     let mut cancelled = Vec::new();
     let mut notifications = Vec::new();
+    let mut open_documents = BTreeMap::new();
+    let mut closed_documents = Vec::new();
+    let mut configuration_changes = Vec::new();
+    let mut watched_file_changes = Vec::new();
     let mut shutdown_requested = false;
     let mut initialize_params = None;
     let mut initialized_received = false;
@@ -98,11 +103,16 @@ fn main() -> io::Result<()> {
                         "id": id,
                         "result": {
                             "cancelled": cancelled,
+                            "closed_documents": closed_documents,
+                            "configuration_changes": configuration_changes,
                             "config_response": config_response,
                             "initialize_params": initialize_params,
                             "initialized_received": initialized_received,
                             "notifications": notifications,
+                            "open_documents": open_documents,
                             "shutdown_requested": shutdown_requested
+                            ,
+                            "watched_file_changes": watched_file_changes
                         }
                     }),
                 )?;
@@ -151,7 +161,7 @@ fn main() -> io::Result<()> {
                     )?;
                 }
                 initialized_received = true;
-                notifications.push("initialized".to_owned());
+                record_notification(&mut writer, &mut notifications, "initialized")?;
                 write_message(
                     &mut writer,
                     &json!({
@@ -204,25 +214,87 @@ fn main() -> io::Result<()> {
                     cancelled.push(id);
                 }
             }
+            (Some("textDocument/didOpen"), None) => {
+                record_notification(&mut writer, &mut notifications, "textDocument/didOpen")?;
+                if let Some(document) = message
+                    .get("params")
+                    .and_then(|params| params.get("textDocument"))
+                {
+                    if let Some(uri) = document.get("uri").and_then(Value::as_str) {
+                        open_documents.insert(uri.to_owned(), document.clone());
+                    }
+                }
+            }
+            (Some("textDocument/didChange"), None) => {
+                record_notification(&mut writer, &mut notifications, "textDocument/didChange")?;
+                if let Some(params) = message.get("params") {
+                    let uri = params
+                        .get("textDocument")
+                        .and_then(|document| document.get("uri"))
+                        .and_then(Value::as_str);
+                    let version = params
+                        .get("textDocument")
+                        .and_then(|document| document.get("version"))
+                        .cloned();
+                    let text = params
+                        .get("contentChanges")
+                        .and_then(Value::as_array)
+                        .and_then(|changes| changes.last())
+                        .and_then(|change| change.get("text"))
+                        .cloned();
+
+                    if let (Some(uri), Some(version), Some(text)) = (uri, version, text) {
+                        if let Some(document) = open_documents.get_mut(uri) {
+                            document["version"] = version;
+                            document["text"] = text;
+                        }
+                    }
+                }
+            }
+            (Some("textDocument/didSave"), None) => {
+                record_notification(&mut writer, &mut notifications, "textDocument/didSave")?;
+            }
+            (Some("textDocument/didClose"), None) => {
+                record_notification(&mut writer, &mut notifications, "textDocument/didClose")?;
+                if let Some(uri) = message
+                    .get("params")
+                    .and_then(|params| params.get("textDocument"))
+                    .and_then(|document| document.get("uri"))
+                    .and_then(Value::as_str)
+                {
+                    open_documents.remove(uri);
+                    closed_documents.push(uri.to_owned());
+                }
+            }
+            (Some("workspace/didChangeConfiguration"), None) => {
+                record_notification(
+                    &mut writer,
+                    &mut notifications,
+                    "workspace/didChangeConfiguration",
+                )?;
+                if let Some(params) = message.get("params") {
+                    configuration_changes.push(params.clone());
+                }
+            }
+            (Some("workspace/didChangeWatchedFiles"), None) => {
+                record_notification(
+                    &mut writer,
+                    &mut notifications,
+                    "workspace/didChangeWatchedFiles",
+                )?;
+                if let Some(changes) = message
+                    .get("params")
+                    .and_then(|params| params.get("changes"))
+                    .and_then(Value::as_array)
+                {
+                    watched_file_changes.extend(changes.iter().cloned());
+                }
+            }
             (None, Some(id)) if id == json!("config-1") => {
                 config_response = message.get("result").cloned().unwrap_or(Value::Null);
             }
             (Some(method), None) => {
-                notifications.push(method.to_owned());
-                write_message(
-                    &mut writer,
-                    &json!({
-                        "jsonrpc": "2.0",
-                        "method": "$/progress",
-                        "params": {
-                            "token": "mock-progress",
-                            "value": {
-                                "kind": "report",
-                                "message": format!("saw:{method}")
-                            }
-                        }
-                    }),
-                )?;
+                record_notification(&mut writer, &mut notifications, method)?;
             }
             _ => {}
         }
@@ -275,4 +347,26 @@ fn write_message(writer: &mut impl Write, message: &Value) -> io::Result<()> {
     write!(writer, "Content-Length: {}\r\n\r\n", body.len())?;
     writer.write_all(&body)?;
     writer.flush()
+}
+
+fn record_notification(
+    writer: &mut impl Write,
+    notifications: &mut Vec<String>,
+    method: &str,
+) -> io::Result<()> {
+    notifications.push(method.to_owned());
+    write_message(
+        writer,
+        &json!({
+            "jsonrpc": "2.0",
+            "method": "$/progress",
+            "params": {
+                "token": "mock-progress",
+                "value": {
+                    "kind": "report",
+                    "message": format!("saw:{method}")
+                }
+            }
+        }),
+    )
 }
