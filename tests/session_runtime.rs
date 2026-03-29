@@ -10,6 +10,22 @@ fn spawn_session() -> Session {
     SessionBuilder::new(binary).spawn().expect("spawn session")
 }
 
+fn spawn_shutdown_failure_session() -> Session {
+    let binary = env!("CARGO_BIN_EXE_mock_rust_analyzer");
+    SessionBuilder::new(binary)
+        .env("MOCK_SHUTDOWN_FAILURE", "1")
+        .spawn()
+        .expect("spawn failing session")
+}
+
+fn spawn_timeout_session(timeout: Duration) -> Session {
+    let binary = env!("CARGO_BIN_EXE_mock_rust_analyzer");
+    SessionBuilder::new(binary)
+        .request_timeout(timeout)
+        .spawn()
+        .expect("spawn timed session")
+}
+
 fn recv_event(events: &Receiver<SessionEvent>) -> SessionEvent {
     events
         .recv_timeout(Duration::from_secs(2))
@@ -107,4 +123,27 @@ fn session_shuts_down_cleanly() {
     let _ = session.take_event_receiver().expect("take event receiver");
 
     session.shutdown().expect("shutdown session");
+}
+
+#[test]
+fn shutdown_failure_keeps_drop_cleanup_enabled() {
+    let session = spawn_shutdown_failure_session();
+    let _ = session.take_event_receiver().expect("take event receiver");
+
+    let error = session.shutdown().expect_err("shutdown should fail");
+    assert!(matches!(error, rust_lsp_mcp::SessionError::Disconnected));
+}
+
+#[test]
+fn session_request_timeout_fails_instead_of_hanging() {
+    let session = spawn_timeout_session(Duration::from_millis(20));
+    let _ = session.take_event_receiver().expect("take event receiver");
+
+    let error = session
+        .request("slow_ping", json!({"message": "hello"}))
+        .expect_err("slow request should time out");
+    assert!(matches!(
+        error,
+        rust_lsp_mcp::SessionError::RequestTimeout { method, .. } if method == "slow_ping"
+    ));
 }
