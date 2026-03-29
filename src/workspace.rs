@@ -548,8 +548,6 @@ impl WorkspaceSession {
         )?;
 
         Ok(self.open_documents.remove(&path).expect("document verified present"))
-
-        Ok(tracked)
     }
 
     /// Pushes a workspace configuration change notification.
