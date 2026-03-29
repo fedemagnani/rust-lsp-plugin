@@ -1,11 +1,12 @@
 //! Workspace-scoped rust-analyzer session management built on top of the JSON-RPC transport.
 
 use crate::lsp::{
-    CompletionContext, CompletionParams, CompletionResponse, DocumentSymbolResponse,
-    DocumentSymbolParams, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
-    Position, PrepareRenameResponse, ReferenceContext, ReferenceParams, RenameParams,
-    TextDocumentIdentifier, TextDocumentPositionParams, Uri, WorkspaceEdit, WorkspaceSymbolParams,
-    WorkspaceSymbolResponse,
+    ClientCapabilities, ClientInfo, CompletionContext, CompletionParams, CompletionResponse,
+    DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse,
+    Hover, HoverParams, InitializeParams, InitializeResult, InitializedParams, Position,
+    PrepareRenameResponse, ReferenceContext, ReferenceParams, RenameParams, ServerCapabilities,
+    ServerInfo, TextDocumentIdentifier, TextDocumentPositionParams, TraceValue, Uri,
+    WorkspaceEdit, WorkspaceFolder, WorkspaceSymbolParams, WorkspaceSymbolResponse,
 };
 use crate::{Session, SessionBuilder, SessionError, SessionEvent};
 use serde::{Serialize, de::DeserializeOwned};
@@ -51,10 +52,10 @@ pub enum WorkspaceLoadingState {
 /// Structured summary produced by a successful `initialize` handshake.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorkspaceReadyState {
-    /// The raw LSP server capabilities from the initialize response.
-    pub server_capabilities: Value,
+    /// Server capabilities reported by initialize.
+    pub server_capabilities: ServerCapabilities,
     /// Optional server information from the initialize response.
-    pub server_info: Option<Value>,
+    pub server_info: Option<ServerInfo>,
     /// Whether the server requested workspace configuration during initialization.
     pub configuration_requested: bool,
     /// Workspace loading progress observed during the handshake.
@@ -93,7 +94,7 @@ pub struct TrackedDocument {
     /// Absolute file-system path for the document.
     pub path: PathBuf,
     /// File URI sent to the server.
-    pub uri: String,
+    pub uri: Uri,
     /// Language identifier used when the document was opened.
     pub language_id: String,
     /// Most recent synchronized document version.
@@ -115,12 +116,6 @@ pub enum WorkspaceSessionError {
         operation: &'static str,
         /// Current session phase.
         phase: WorkspaceSessionPhase,
-    },
-    /// The initialize result did not contain the expected fields.
-    #[error("initialize response missing {field}")]
-    MissingInitializeField {
-        /// Missing response field name.
-        field: &'static str,
     },
     /// The event receiver was not available when the workspace session was created.
     #[error("workspace session is missing the event receiver")]
@@ -171,7 +166,7 @@ pub struct WorkspaceSessionBuilder {
     workspace_root: PathBuf,
     client_name: String,
     client_version: Option<String>,
-    client_capabilities: Value,
+    client_capabilities: ClientCapabilities,
     initialization_options: Value,
     workspace_configuration: Value,
 }
@@ -238,7 +233,7 @@ impl WorkspaceSessionBuilder {
     }
 
     /// Overrides the rust-analyzer client capabilities sent in the initialize request.
-    pub fn client_capabilities(mut self, capabilities: Value) -> Self {
+    pub fn client_capabilities(mut self, capabilities: ClientCapabilities) -> Self {
         self.client_capabilities = capabilities;
         self
     }
@@ -306,7 +301,7 @@ pub struct WorkspaceSession {
     workspace_uri: String,
     client_name: String,
     client_version: Option<String>,
-    client_capabilities: Value,
+    client_capabilities: ClientCapabilities,
     initialization_options: Value,
     workspace_configuration: Value,
     ready_timeout: Duration,
@@ -365,17 +360,14 @@ impl WorkspaceSession {
         self.phase = WorkspaceSessionPhase::Initializing;
 
         let result: Result<(), WorkspaceSessionError> = (|| {
-            let initialize_result = self
-                .session
-                .request("initialize", self.initialize_params())?;
-            let server_capabilities = initialize_result.get("capabilities").cloned().ok_or(
-                WorkspaceSessionError::MissingInitializeField {
-                    field: "capabilities",
-                },
-            )?;
-            let server_info = initialize_result.get("serverInfo").cloned();
+            let initialize_result: InitializeResult =
+                serde_json::from_value(self.session.request("initialize", self.initialize_params())?)
+                    .map_err(|source| WorkspaceSessionError::InvalidResponse {
+                        method: "initialize",
+                        source,
+                    })?;
 
-            self.session.notify("initialized", json!({}))?;
+            self.session.notify("initialized", InitializedParams {})?;
 
             let mut configuration_requested = false;
             loop {
@@ -386,7 +378,7 @@ impl WorkspaceSession {
                         configuration_requested = true;
                         let response = configuration_response(
                             &self.workspace_configuration,
-                            request.params.as_ref(),
+                            Some(&request.params),
                         );
                         self.session.respond(request.id, response)?;
                     }
@@ -402,8 +394,8 @@ impl WorkspaceSession {
 
             self.phase = WorkspaceSessionPhase::Ready;
             self.ready_state = Some(WorkspaceReadyState {
-                server_capabilities,
-                server_info,
+                server_capabilities: initialize_result.capabilities,
+                server_info: initialize_result.server_info,
                 configuration_requested,
                 loading_state: self.loading_state.clone(),
             });
@@ -596,7 +588,7 @@ impl WorkspaceSession {
         }
 
         let tracked = TrackedDocument {
-            uri: file_uri_from_path(&path),
+            uri: parse_uri(&file_uri_from_path(&path)),
             path: path.clone(),
             language_id: language_id.into(),
             version,
@@ -780,26 +772,25 @@ impl WorkspaceSession {
         Ok(())
     }
 
-    fn initialize_params(&self) -> Value {
-        json!({
-            "processId": Value::Null,
-            "clientInfo": {
-                "name": self.client_name,
-                "version": self.client_version,
-            },
-            "locale": "en-US",
-            "rootPath": self.workspace_root.to_string_lossy(),
-            "rootUri": self.workspace_uri,
-            "workspaceFolders": [
-                {
-                    "uri": self.workspace_uri,
-                    "name": workspace_folder_name(&self.workspace_root),
-                }
-            ],
-            "trace": "off",
-            "capabilities": self.client_capabilities,
-            "initializationOptions": self.initialization_options,
-        })
+    fn initialize_params(&self) -> InitializeParams {
+        InitializeParams {
+            process_id: None,
+            root_path: None,
+            root_uri: None,
+            initialization_options: Some(self.initialization_options.clone()),
+            capabilities: self.client_capabilities.clone(),
+            trace: Some(TraceValue::Off),
+            workspace_folders: Some(vec![WorkspaceFolder {
+                uri: parse_uri(&self.workspace_uri),
+                name: workspace_folder_name(&self.workspace_root),
+            }]),
+            client_info: Some(ClientInfo {
+                name: self.client_name.clone(),
+                version: self.client_version.clone(),
+            }),
+            locale: Some("en-US".to_owned()),
+            work_done_progress_params: Default::default(),
+        }
     }
 
     fn recv_event_with_timeout(
@@ -867,7 +858,7 @@ impl WorkspaceSession {
         Ok(self
             .open_documents
             .get(&path)
-            .map(|document| document.uri.clone())
+            .map(|document| document.uri.as_str().to_owned())
             .unwrap_or_else(|| file_uri_from_path(&path)))
     }
 
@@ -907,8 +898,8 @@ fn text_document_position_params(
     TextDocumentPositionParams::new(text_document, position)
 }
 
-fn default_client_capabilities() -> Value {
-    json!({
+fn default_client_capabilities() -> ClientCapabilities {
+    serde_json::from_value(json!({
         "general": {
             "positionEncodings": ["utf-8", "utf-16", "utf-32"],
         },
@@ -961,7 +952,8 @@ fn default_client_capabilities() -> Value {
             "snippetTextEdit": true,
             "testExplorer": true,
         },
-    })
+    }))
+    .expect("default client capabilities are valid")
 }
 
 fn default_initialization_options() -> Value {
@@ -1150,7 +1142,7 @@ fn percent_encode(segment: &OsStr) -> String {
 fn is_progress_notification(event: &SessionEvent) -> bool {
     matches!(
         event,
-        SessionEvent::Notification { method, .. } if method == "$/progress"
+        SessionEvent::Notification(notification) if notification.method == "$/progress"
     )
 }
 

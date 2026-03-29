@@ -1,8 +1,7 @@
 //! Session runtime for stdio-backed JSON-RPC servers such as `rust-analyzer`.
 
 use lsp_server::{
-    Message, Notification, Request, RequestId as LspRequestId, Response,
-    ResponseError as LspResponseError,
+    Message, Notification, Request, RequestId, Response, ResponseError,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -19,71 +18,16 @@ use std::time::{Duration, Instant};
 
 const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// JSON-RPC request identifier.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
-pub enum JsonRpcId {
-    /// Numeric request identifier.
-    Integer(i64),
-    /// String request identifier.
-    String(String),
-}
-
-impl JsonRpcId {
-    fn from_outgoing(id: u64) -> Result<Self, SessionError> {
-        let id =
-            i64::try_from(id).map_err(|_| SessionError::Protocol("request id overflow".into()))?;
-        Ok(Self::Integer(id))
-    }
-
-    fn into_lsp(self) -> Result<LspRequestId, SessionError> {
-        match self {
-            Self::Integer(id) => {
-                let id = i32::try_from(id)
-                    .map_err(|_| SessionError::Protocol("request id overflow".into()))?;
-                Ok(LspRequestId::from(id))
-            }
-            Self::String(id) => Ok(LspRequestId::from(id)),
-        }
-    }
-
-    fn from_lsp(id: LspRequestId) -> Result<Self, SessionError> {
-        serde_json::from_value(serde_json::to_value(id)?).map_err(SessionError::Json)
-    }
-}
-
-/// JSON-RPC error returned by a remote server.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResponseError {
-    /// Protocol-defined numeric error code.
-    pub code: i64,
-    /// Human-readable error message.
-    pub message: String,
-    /// Optional structured error payload.
-    pub data: Option<Value>,
-}
-
-/// A server-originated request surfaced to higher layers.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ServerRequest {
-    /// Server-generated request id.
-    pub id: JsonRpcId,
-    /// Requested method name.
-    pub method: String,
-    /// Optional request parameters.
-    pub params: Option<Value>,
+fn request_id_from_outgoing(id: u64) -> Result<RequestId, SessionError> {
+    let id = i32::try_from(id).map_err(|_| SessionError::Protocol("request id overflow".into()))?;
+    Ok(RequestId::from(id))
 }
 
 /// Transport-level events emitted by a running session.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum SessionEvent {
     /// A server notification.
-    Notification {
-        /// Notification method name.
-        method: String,
-        /// Optional notification params.
-        params: Option<Value>,
-    },
+    Notification(Notification),
     /// A normalized progress notification extracted from `$/progress`.
     Progress {
         /// Progress token.
@@ -92,7 +36,7 @@ pub enum SessionEvent {
         value: Value,
     },
     /// A server-originated request that higher layers may answer.
-    ServerRequest(ServerRequest),
+    ServerRequest(Request),
     /// A line observed on the child process stderr stream.
     Stderr(String),
 }
@@ -324,7 +268,7 @@ impl Session {
     {
         let request_id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let message = Message::Request(Request::new(
-            JsonRpcId::from_outgoing(request_id)?.into_lsp()?,
+            request_id_from_outgoing(request_id)?,
             method.to_owned(),
             params,
         ));
@@ -375,30 +319,30 @@ impl Session {
     }
 
     /// Sends a JSON-RPC success response to a server-originated request.
-    pub fn respond<R>(&self, id: JsonRpcId, result: R) -> Result<(), SessionError>
+    pub fn respond<R>(&self, id: RequestId, result: R) -> Result<(), SessionError>
     where
         R: Serialize,
     {
-        let message = Message::Response(Response::new_ok(id.into_lsp()?, result));
+        let message = Message::Response(Response::new_ok(id, result));
         self.write_message(&message)
     }
 
     /// Sends a JSON-RPC error response to a server-originated request.
     pub fn respond_error(
         &self,
-        id: JsonRpcId,
+        id: RequestId,
         code: i64,
         message: impl Into<String>,
         data: Option<Value>,
     ) -> Result<(), SessionError> {
         let mut response = Response::new_err(
-            id.into_lsp()?,
+            id,
             i32::try_from(code)
                 .map_err(|_| SessionError::Protocol("response error code overflow".into()))?,
             message.into(),
         );
         if let Some(data) = data {
-            response.error = Some(LspResponseError {
+            response.error = Some(ResponseError {
                 data: Some(data),
                 ..response.error.expect("new_err sets error")
             });
@@ -408,7 +352,7 @@ impl Session {
     }
 
     /// Requests cancellation for an in-flight request.
-    pub fn cancel_request(&self, id: JsonRpcId) -> Result<(), SessionError> {
+    pub fn cancel_request(&self, id: RequestId) -> Result<(), SessionError> {
         self.notify("$/cancelRequest", json!({ "id": id }))
     }
 
@@ -615,22 +559,15 @@ fn handle_incoming_message(
 ) -> Result<(), SessionError> {
     match message {
         Message::Request(request) => {
-            let request = ServerRequest {
-                id: JsonRpcId::from_lsp(request.id)?,
-                method: request.method,
-                params: Some(request.params),
-            };
             event_tx
                 .send(SessionEvent::ServerRequest(request))
                 .map_err(|_| SessionError::Disconnected)
         }
         Message::Notification(notification) => {
-            let method = notification.method;
-            let params = Some(notification.params);
+            let method = notification.method.clone();
+            let params = notification.params.clone();
             if method == "$/progress" {
-                let params_value = params.clone().ok_or_else(|| {
-                    SessionError::Protocol("progress notification missing params".into())
-                })?;
+                let params_value = params;
                 let token = params_value.get("token").cloned().ok_or_else(|| {
                     SessionError::Protocol("progress notification missing token".into())
                 })?;
@@ -643,13 +580,13 @@ fn handle_incoming_message(
             }
 
             event_tx
-                .send(SessionEvent::Notification { method, params })
+                .send(SessionEvent::Notification(notification))
                 .map_err(|_| SessionError::Disconnected)
         }
         Message::Response(response) => {
             let id = parse_outgoing_response_id(&response.id)?;
             let result = if let Some(error) = response.error {
-                Err(SessionError::ServerError(parse_response_error(error)))
+                Err(SessionError::ServerError(error))
             } else {
                 Ok(response.result.unwrap_or(Value::Null))
             };
@@ -662,15 +599,7 @@ fn handle_incoming_message(
     }
 }
 
-fn parse_response_error(error: LspResponseError) -> ResponseError {
-    ResponseError {
-        code: i64::from(error.code),
-        message: error.message,
-        data: error.data,
-    }
-}
-
-fn parse_outgoing_response_id(id: &LspRequestId) -> Result<u64, SessionError> {
+fn parse_outgoing_response_id(id: &RequestId) -> Result<u64, SessionError> {
     let value = serde_json::to_value(id)?;
     let number = value
         .as_i64()

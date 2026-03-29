@@ -5,8 +5,9 @@ pub mod session;
 pub mod workspace;
 
 pub use lsp::*;
+pub use lsp_server::{Notification, Request, RequestId, Response, ResponseError};
 pub use session::{
-    JsonRpcId, ResponseError, ServerRequest, Session, SessionBuilder, SessionError, SessionEvent,
+    Session, SessionBuilder, SessionError, SessionEvent,
 };
 pub use workspace::{
     TrackedDocument, WatchedFileChange, WatchedFileChangeKind, WorkspaceLoadingState,

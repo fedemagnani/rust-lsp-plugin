@@ -32,8 +32,9 @@ fn synchronizes_open_change_save_and_close() -> Result<(), Box<dyn Error>> {
         .expect("tracked document after save")
         .uri
         .clone();
+    let uri_text = uri.as_str().to_owned();
     let state = session.request("state", json!({}))?;
-    let server_document = state["open_documents"][&uri].clone();
+    let server_document = state["open_documents"][&uri_text].clone();
     assert_eq!(server_document["languageId"], "rust");
     assert_eq!(server_document["version"], 2);
     assert_eq!(server_document["text"], "fn main() { println!(\"hi\"); }\n");
@@ -50,13 +51,13 @@ fn synchronizes_open_change_save_and_close() -> Result<(), Box<dyn Error>> {
     assert!(session.document(&file_path)?.is_none());
 
     let state = session.request("state", json!({}))?;
-    assert!(state["open_documents"].get(&uri).is_none());
+    assert!(state["open_documents"].get(&uri_text).is_none());
     assert!(
         state["closed_documents"]
             .as_array()
             .expect("closed documents")
             .iter()
-            .any(|value| value == &Value::String(uri.clone()))
+            .any(|value| value == &Value::String(uri_text.clone()))
     );
 
     session.shutdown()?;
