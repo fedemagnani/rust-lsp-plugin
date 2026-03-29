@@ -5,7 +5,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::ffi::{OsStr, OsString};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Duration;
 
@@ -260,50 +260,59 @@ impl WorkspaceSession {
         self.ensure_phase("initialize", WorkspaceSessionPhase::PreInitialize)?;
         self.phase = WorkspaceSessionPhase::Initializing;
 
-        let initialize_result = self
-            .session
-            .request("initialize", self.initialize_params())?;
-        let server_capabilities = initialize_result
-            .get("capabilities")
-            .cloned()
-            .ok_or(WorkspaceSessionError::MissingInitializeField {
-                field: "capabilities",
-            })?;
-        let server_info = initialize_result.get("serverInfo").cloned();
+        let result: Result<(), WorkspaceSessionError> = (|| {
+            let initialize_result = self
+                .session
+                .request("initialize", self.initialize_params())?;
+            let server_capabilities = initialize_result
+                .get("capabilities")
+                .cloned()
+                .ok_or(WorkspaceSessionError::MissingInitializeField {
+                    field: "capabilities",
+                })?;
+            let server_info = initialize_result.get("serverInfo").cloned();
 
-        self.session.notify("initialized", json!({}))?;
+            self.session.notify("initialized", json!({}))?;
 
-        let mut configuration_requested = false;
-        loop {
-            match self.recv_event_with_timeout(self.ready_timeout)? {
-                Some(SessionEvent::ServerRequest(request))
-                    if request.method == "workspace/configuration" =>
-                {
-                    configuration_requested = true;
-                    let response = configuration_response(
-                        &self.workspace_configuration,
-                        request.params.as_ref(),
-                    );
-                    self.session.respond(request.id, response)?;
+            let mut configuration_requested = false;
+            loop {
+                match self.recv_event_with_timeout(self.ready_timeout)? {
+                    Some(SessionEvent::ServerRequest(request))
+                        if request.method == "workspace/configuration" =>
+                    {
+                        configuration_requested = true;
+                        let response = configuration_response(
+                            &self.workspace_configuration,
+                            request.params.as_ref(),
+                        );
+                        self.session.respond(request.id, response)?;
+                    }
+                    Some(SessionEvent::Progress { value, .. }) => {
+                        self.update_loading_state(&value);
+                    }
+                    Some(other) => {
+                        self.capture_event(other);
+                    }
+                    None => break,
                 }
-                Some(SessionEvent::Progress { value, .. }) => {
-                    self.update_loading_state(&value);
-                }
-                Some(other) => {
-                    self.capture_event(other);
-                }
-                None => break,
             }
+
+            self.phase = WorkspaceSessionPhase::Ready;
+            self.ready_state = Some(WorkspaceReadyState {
+                server_capabilities,
+                server_info,
+                configuration_requested,
+                loading_state: self.loading_state.clone(),
+            });
+
+            Ok(())
+        })();
+
+        if result.is_err() {
+            self.phase = WorkspaceSessionPhase::PreInitialize;
         }
 
-        self.phase = WorkspaceSessionPhase::Ready;
-        self.ready_state = Some(WorkspaceReadyState {
-            server_capabilities,
-            server_info,
-            configuration_requested,
-            loading_state: self.loading_state.clone(),
-        });
-
+        result?;
         Ok(self.ready_state.as_ref().expect("ready state set"))
     }
 
@@ -557,12 +566,48 @@ fn absolutize_path(path: PathBuf) -> Result<PathBuf, SessionError> {
 }
 
 fn file_uri_from_path(path: &Path) -> String {
-    let encoded = path
-        .components()
-        .map(|component| percent_encode(component.as_os_str()))
-        .collect::<Vec<_>>()
-        .join("/");
-    format!("file:///{}", encoded)
+    let mut uri = String::from("file://");
+
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => match prefix.kind() {
+                Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => {
+                    uri.push('/');
+                    uri.push(char::from(letter));
+                    uri.push(':');
+                }
+                Prefix::UNC(server, share) | Prefix::VerbatimUNC(server, share) => {
+                    uri.push_str(&percent_encode(server));
+                    uri.push('/');
+                    uri.push_str(&percent_encode(share));
+                }
+                Prefix::DeviceNS(namespace) => {
+                    uri.push('/');
+                    uri.push_str(&percent_encode(namespace));
+                }
+                Prefix::Verbatim(segment) => {
+                    uri.push('/');
+                    uri.push_str(&percent_encode(segment));
+                }
+            },
+            Component::RootDir => uri.push('/'),
+            Component::Normal(segment) => {
+                if !uri.ends_with('/') {
+                    uri.push('/');
+                }
+                uri.push_str(&percent_encode(segment));
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !uri.ends_with('/') {
+                    uri.push('/');
+                }
+                uri.push_str("..");
+            }
+        }
+    }
+
+    uri
 }
 
 fn workspace_folder_name(path: &Path) -> String {
@@ -595,4 +640,28 @@ fn is_progress_notification(event: &SessionEvent) -> bool {
         event,
         SessionEvent::Notification { method, .. } if method == "$/progress"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::file_uri_from_path;
+    use std::path::Path;
+
+    #[test]
+    #[cfg(unix)]
+    fn file_uri_from_unix_path_uses_forward_slashes() {
+        assert_eq!(
+            file_uri_from_path(Path::new("/tmp/rust workspace")),
+            "file:///tmp/rust%20workspace"
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn file_uri_from_windows_disk_path_uses_drive_prefix() {
+        assert_eq!(
+            file_uri_from_path(Path::new(r"C:\Users\dev\rust workspace")),
+            "file:///C:/Users/dev/rust%20workspace"
+        );
+    }
 }

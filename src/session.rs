@@ -6,12 +6,14 @@ use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvError, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// JSON-RPC request identifier.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -105,6 +107,12 @@ pub enum SessionError {
         /// The configured timeout that elapsed.
         timeout: Duration,
     },
+    /// The child process did not exit within the configured shutdown timeout.
+    #[error("child process did not exit within {timeout:?}")]
+    ProcessExitTimeout {
+        /// The configured shutdown timeout that elapsed.
+        timeout: Duration,
+    },
     /// The child process or transport disconnected before completion.
     #[error("session disconnected")]
     Disconnected,
@@ -117,13 +125,13 @@ impl From<RecvError> for SessionError {
 }
 
 /// Builder for a stdio-backed JSON-RPC session.
-#[derive(Default)]
 pub struct SessionBuilder {
     program: OsString,
     args: Vec<OsString>,
     current_dir: Option<PathBuf>,
     envs: Vec<(OsString, OsString)>,
     request_timeout: Option<Duration>,
+    shutdown_timeout: Duration,
 }
 
 impl SessionBuilder {
@@ -131,7 +139,11 @@ impl SessionBuilder {
     pub fn new(program: impl AsRef<OsStr>) -> Self {
         Self {
             program: program.as_ref().to_os_string(),
-            ..Self::default()
+            args: Vec::new(),
+            current_dir: None,
+            envs: Vec::new(),
+            request_timeout: None,
+            shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
         }
     }
 
@@ -168,6 +180,12 @@ impl SessionBuilder {
     /// Sets the default timeout applied to `request`.
     pub fn request_timeout(mut self, timeout: Duration) -> Self {
         self.request_timeout = Some(timeout);
+        self
+    }
+
+    /// Sets the maximum time spent waiting for the child process to exit.
+    pub fn shutdown_timeout(mut self, timeout: Duration) -> Self {
+        self.shutdown_timeout = timeout;
         self
     }
 
@@ -223,6 +241,7 @@ impl SessionBuilder {
             stderr_handle: Mutex::new(Some(stderr_handle)),
             terminated,
             request_timeout: self.request_timeout,
+            shutdown_timeout: self.shutdown_timeout,
             shutdown_sent: AtomicBool::new(false),
         })
     }
@@ -241,6 +260,7 @@ pub struct Session {
     stderr_handle: Mutex<Option<JoinHandle<()>>>,
     terminated: Arc<AtomicBool>,
     request_timeout: Option<Duration>,
+    shutdown_timeout: Duration,
     shutdown_sent: AtomicBool,
 }
 
@@ -399,7 +419,7 @@ impl Session {
             self.finish_process()
         })();
 
-        if result.is_err() {
+        if result.is_err() && !matches!(result, Err(SessionError::ProcessExitTimeout { .. })) {
             self.shutdown_sent.store(false, Ordering::SeqCst);
         }
 
@@ -423,25 +443,17 @@ impl Session {
         self.terminated.store(true, Ordering::SeqCst);
         close_pending(&self.pending, SessionError::Disconnected);
 
-        let status = self.child.lock().expect("child poisoned").wait()?;
-        if let Some(handle) = self
-            .reader_handle
-            .lock()
-            .expect("reader handle poisoned")
-            .take()
-        {
-            let _ = handle.join();
-        }
-        if let Some(handle) = self
-            .stderr_handle
-            .lock()
-            .expect("stderr handle poisoned")
-            .take()
-        {
-            let _ = handle.join();
-        }
+        let (status, forced_shutdown) = {
+            let mut child = self.child.lock().expect("child poisoned");
+            wait_for_child_exit_or_kill(&mut child, self.shutdown_timeout)?
+        };
+        join_transport_threads(&self.reader_handle, &self.stderr_handle);
 
-        if status.success() {
+        if forced_shutdown {
+            Err(SessionError::ProcessExitTimeout {
+                timeout: self.shutdown_timeout,
+            })
+        } else if status.success() {
             Ok(())
         } else {
             Err(SessionError::Protocol(format!(
@@ -461,21 +473,59 @@ impl Drop for Session {
         close_pending(&self.pending, SessionError::Disconnected);
 
         if let Ok(mut child) = self.child.lock() {
-            let _ = child.kill();
-            let _ = child.wait();
+            let _ = wait_for_child_exit_or_kill(&mut child, self.shutdown_timeout);
         }
 
-        if let Ok(mut handle) = self.reader_handle.lock() {
-            if let Some(handle) = handle.take() {
-                let _ = handle.join();
-            }
+        join_transport_threads(&self.reader_handle, &self.stderr_handle);
+    }
+}
+
+fn join_transport_threads(
+    reader_handle: &Mutex<Option<JoinHandle<()>>>,
+    stderr_handle: &Mutex<Option<JoinHandle<()>>>,
+) {
+    if let Ok(mut handle) = reader_handle.lock() {
+        if let Some(handle) = handle.take() {
+            let _ = handle.join();
+        }
+    }
+
+    if let Ok(mut handle) = stderr_handle.lock() {
+        if let Some(handle) = handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn wait_for_child_exit_or_kill(
+    child: &mut Child,
+    timeout: Duration,
+) -> Result<(ExitStatus, bool), SessionError> {
+    if let Some(status) = wait_for_child_exit(child, timeout)? {
+        return Ok((status, false));
+    }
+
+    let _ = child.kill();
+    let status = child.wait()?;
+    Ok((status, true))
+}
+
+fn wait_for_child_exit(
+    child: &mut Child,
+    timeout: Duration,
+) -> io::Result<Option<ExitStatus>> {
+    let start = Instant::now();
+
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(Some(status));
         }
 
-        if let Ok(mut handle) = self.stderr_handle.lock() {
-            if let Some(handle) = handle.take() {
-                let _ = handle.join();
-            }
+        if start.elapsed() >= timeout {
+            return Ok(None);
         }
+
+        thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -550,6 +600,9 @@ fn close_pending(pending: &PendingMap, error: SessionError) {
                 method: method.clone(),
                 timeout: *timeout,
             },
+            SessionError::ProcessExitTimeout { timeout } => {
+                SessionError::ProcessExitTimeout { timeout: *timeout }
+            }
             SessionError::Disconnected => SessionError::Disconnected,
         }));
     }

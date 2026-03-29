@@ -3,7 +3,7 @@
 use rust_lsp_mcp::{JsonRpcId, ServerRequest, Session, SessionBuilder, SessionEvent};
 use serde_json::json;
 use std::sync::mpsc::Receiver;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn spawn_session() -> Session {
     let binary = env!("CARGO_BIN_EXE_mock_rust_analyzer");
@@ -24,6 +24,15 @@ fn spawn_timeout_session(timeout: Duration) -> Session {
         .request_timeout(timeout)
         .spawn()
         .expect("spawn timed session")
+}
+
+fn spawn_hung_exit_session(timeout: Duration) -> Session {
+    let binary = env!("CARGO_BIN_EXE_mock_rust_analyzer");
+    SessionBuilder::new(binary)
+        .env("MOCK_HANG_ON_EXIT", "1")
+        .shutdown_timeout(timeout)
+        .spawn()
+        .expect("spawn hanging session")
 }
 
 fn recv_event(events: &Receiver<SessionEvent>) -> SessionEvent {
@@ -146,4 +155,20 @@ fn session_request_timeout_fails_instead_of_hanging() {
         error,
         rust_lsp_mcp::SessionError::RequestTimeout { method, .. } if method == "slow_ping"
     ));
+}
+
+#[test]
+fn session_shutdown_times_out_for_hung_exit() {
+    let session = spawn_hung_exit_session(Duration::from_millis(50));
+    let _ = session.take_event_receiver().expect("take event receiver");
+
+    let start = Instant::now();
+    let error = session.shutdown().expect_err("shutdown should time out");
+
+    assert!(matches!(
+        error,
+        rust_lsp_mcp::SessionError::ProcessExitTimeout { timeout }
+            if timeout == Duration::from_millis(50)
+    ));
+    assert!(start.elapsed() < Duration::from_secs(1));
 }

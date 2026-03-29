@@ -8,6 +8,8 @@ use std::time::Duration;
 fn main() -> io::Result<()> {
     eprintln!("mock-rust-analyzer: ready");
     let fail_shutdown = std::env::var_os("MOCK_SHUTDOWN_FAILURE").is_some();
+    let fail_initialized = std::env::var_os("MOCK_INITIALIZED_FAILURE").is_some();
+    let hang_on_exit = std::env::var_os("MOCK_HANG_ON_EXIT").is_some();
 
     let stdin = io::stdin();
     let stdout = io::stdout();
@@ -119,8 +121,18 @@ fn main() -> io::Result<()> {
                     }),
                 )?;
             }
-            (Some("exit"), None) => break,
+            (Some("exit"), None) => {
+                if hang_on_exit {
+                    loop {
+                        thread::sleep(Duration::from_secs(1));
+                    }
+                }
+                break;
+            }
             (Some("initialized"), None) => {
+                if fail_initialized {
+                    break;
+                }
                 initialized_received = true;
                 notifications.push("initialized".to_owned());
                 write_message(

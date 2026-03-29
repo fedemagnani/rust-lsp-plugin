@@ -20,6 +20,15 @@ fn spawn_workspace_session() -> rust_lsp_mcp::WorkspaceSession {
         .expect("spawn workspace session")
 }
 
+fn spawn_failing_initialized_workspace_session() -> rust_lsp_mcp::WorkspaceSession {
+    let binary = env!("CARGO_BIN_EXE_mock_rust_analyzer");
+    WorkspaceSessionBuilder::new(binary, workspace_root())
+        .env("MOCK_INITIALIZED_FAILURE", "1")
+        .ready_timeout(Duration::from_millis(200))
+        .spawn()
+        .expect("spawn workspace session")
+}
+
 #[test]
 fn workspace_session_initializes_and_reaches_ready_state() {
     let mut session = spawn_workspace_session();
@@ -116,4 +125,18 @@ fn workspace_session_rejects_requests_before_initialize() {
             phase: WorkspaceSessionPhase::PreInitialize,
         }
     ));
+}
+
+#[test]
+fn workspace_session_resets_phase_when_initialize_fails() {
+    let mut session = spawn_failing_initialized_workspace_session();
+
+    let error = session
+        .initialize()
+        .expect_err("initialize should fail when initialized handling disconnects");
+    assert!(matches!(
+        error,
+        WorkspaceSessionError::Session(rust_lsp_mcp::SessionError::Disconnected)
+    ));
+    assert_eq!(session.phase(), WorkspaceSessionPhase::PreInitialize);
 }
