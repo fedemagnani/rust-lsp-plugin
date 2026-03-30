@@ -753,10 +753,11 @@ impl WorkspaceSession {
 
     #[allow(deprecated)]
     fn initialize_params(&self) -> InitializeParams {
+    fn initialize_params(&self) -> InitializeParams {
         InitializeParams {
             process_id: None,
-            root_path: None,
-            root_uri: None,
+            root_path: Some(self.workspace_root.to_string_lossy().into_owned()),
+            root_uri: Some(parse_uri(&self.workspace_uri)),
             initialization_options: Some(self.initialization_options.clone()),
             capabilities: self.client_capabilities.clone(),
             trace: Some(TraceValue::Off),
