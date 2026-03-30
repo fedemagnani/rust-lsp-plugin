@@ -234,4 +234,7 @@ impl From<WorkspaceSessionError> for ServerError {
     }
 }
 
-fn _assert_send_sync(_: &ServerError, _: &PathBuf) {}
+const _: () = {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<ServerError>();
+};
