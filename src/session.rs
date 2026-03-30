@@ -1,8 +1,6 @@
 //! Session runtime for stdio-backed JSON-RPC servers such as `rust-analyzer`.
 
-use lsp_server::{
-    Message, Notification, Request, RequestId, Response, ResponseError,
-};
+use lsp_server::{Message, Notification, Request, RequestId, Response, ResponseError};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -228,6 +226,10 @@ pub struct Session {
 }
 
 impl Session {
+    pub(crate) fn is_terminated(&self) -> bool {
+        self.terminated.load(Ordering::SeqCst)
+    }
+
     /// Takes ownership of the event receiver, if it has not already been taken.
     pub fn take_event_receiver(&self) -> Option<Receiver<SessionEvent>> {
         self.event_rx
@@ -558,11 +560,9 @@ fn handle_incoming_message(
     event_tx: &Sender<SessionEvent>,
 ) -> Result<(), SessionError> {
     match message {
-        Message::Request(request) => {
-            event_tx
-                .send(SessionEvent::ServerRequest(request))
-                .map_err(|_| SessionError::Disconnected)
-        }
+        Message::Request(request) => event_tx
+            .send(SessionEvent::ServerRequest(request))
+            .map_err(|_| SessionError::Disconnected),
         Message::Notification(notification) => {
             let method = notification.method.clone();
             let params = notification.params.clone();
