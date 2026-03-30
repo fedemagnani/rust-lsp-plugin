@@ -1,6 +1,8 @@
 //! Workspace-scoped rust-analyzer session management built on top of the JSON-RPC transport.
 
-use crate::lsp::{
+use super::rust_analyzer as ra;
+use super::session::{Session, SessionBuilder, SessionError, SessionEvent};
+use super::{
     ClientCapabilities, ClientInfo, CompletionContext, CompletionParams, CompletionResponse,
     DidChangeTextDocumentParams, DidChangeWatchedFilesParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentSymbolParams,
@@ -12,8 +14,6 @@ use crate::lsp::{
     WorkspaceFolder, WorkspaceSymbolParams, WorkspaceSymbolResponse,
     request::Request as LspRequest,
 };
-use crate::rust_analyzer as ra;
-use crate::{Session, SessionBuilder, SessionError, SessionEvent};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
@@ -491,7 +491,7 @@ impl WorkspaceSession {
         path: impl AsRef<Path>,
         position: Position,
         include_declaration: bool,
-    ) -> Result<Option<Vec<crate::lsp::Location>>, WorkspaceSessionError> {
+    ) -> Result<Option<Vec<super::Location>>, WorkspaceSessionError> {
         self.typed_request(
             "textDocument/references",
             ReferenceParams {
@@ -560,7 +560,7 @@ impl WorkspaceSession {
         &self,
         query: impl Into<String>,
     ) -> Result<Option<WorkspaceSymbolResponse>, WorkspaceSessionError> {
-        self.request_typed::<crate::lsp::request::WorkspaceSymbolRequest>(WorkspaceSymbolParams {
+        self.request_typed::<super::request::WorkspaceSymbolRequest>(WorkspaceSymbolParams {
             query: query.into(),
             work_done_progress_params: Default::default(),
             partial_result_params: Default::default(),

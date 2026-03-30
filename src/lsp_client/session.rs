@@ -433,16 +433,16 @@ fn join_transport_threads(
     reader_handle: &Mutex<Option<JoinHandle<()>>>,
     stderr_handle: &Mutex<Option<JoinHandle<()>>>,
 ) {
-    if let Ok(mut handle) = reader_handle.lock() {
-        if let Some(handle) = handle.take() {
-            let _ = handle.join();
-        }
+    if let Ok(mut handle) = reader_handle.lock()
+        && let Some(handle) = handle.take()
+    {
+        let _ = handle.join();
     }
 
-    if let Ok(mut handle) = stderr_handle.lock() {
-        if let Some(handle) = handle.take() {
-            let _ = handle.join();
-        }
+    if let Ok(mut handle) = stderr_handle.lock()
+        && let Some(handle) = handle.take()
+    {
+        let _ = handle.join();
     }
 }
 
