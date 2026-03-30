@@ -42,8 +42,19 @@ fn main() -> io::Result<()> {
                         "id": id,
                         "result": {
                             "capabilities": {
+                                "completionProvider": {
+                                    "resolveProvider": false,
+                                    "triggerCharacters": [".", ":"]
+                                },
+                                "definitionProvider": true,
+                                "documentSymbolProvider": true,
                                 "hoverProvider": true,
-                                "positionEncoding": "utf-8"
+                                "positionEncoding": "utf-8",
+                                "referencesProvider": true,
+                                "renameProvider": {
+                                    "prepareProvider": true
+                                },
+                                "workspaceSymbolProvider": true
                             },
                             "serverInfo": {
                                 "name": "mock-rust-analyzer",
@@ -73,6 +84,174 @@ fn main() -> io::Result<()> {
                         "jsonrpc": "2.0",
                         "id": id,
                         "result": { "echo": params }
+                    }),
+                )?;
+            }
+            (Some("textDocument/hover"), Some(id)) => {
+                let uri = text_document_uri(&message);
+                write_message(
+                    &mut writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {
+                            "contents": {
+                                "kind": "markdown",
+                                "value": "```rust\nfn answer() -> u32\n```"
+                            },
+                            "range": hover_range()
+                        }
+                    }),
+                )?;
+                let _ = uri;
+            }
+            (Some("textDocument/completion"), Some(id)) => {
+                write_message(
+                    &mut writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {
+                            "isIncomplete": false,
+                            "items": [
+                                {
+                                    "label": "answer",
+                                    "kind": 3,
+                                    "detail": "fn answer() -> u32",
+                                    "documentation": {
+                                        "kind": "markdown",
+                                        "value": "Returns the answer."
+                                    },
+                                    "insertText": "answer"
+                                }
+                            ]
+                        }
+                    }),
+                )?;
+            }
+            (Some("textDocument/definition"), Some(id)) => {
+                let uri = text_document_uri(&message);
+                write_message(
+                    &mut writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": [
+                            {
+                                "uri": uri,
+                                "range": symbol_range()
+                            }
+                        ]
+                    }),
+                )?;
+            }
+            (Some("textDocument/references"), Some(id)) => {
+                let uri = text_document_uri(&message);
+                write_message(
+                    &mut writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": [
+                            {
+                                "uri": uri,
+                                "range": symbol_range()
+                            },
+                            {
+                                "uri": uri,
+                                "range": {
+                                    "start": { "line": 5, "character": 4 },
+                                    "end": { "line": 5, "character": 10 }
+                                }
+                            }
+                        ]
+                    }),
+                )?;
+            }
+            (Some("textDocument/prepareRename"), Some(id)) => {
+                write_message(
+                    &mut writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {
+                            "range": symbol_range(),
+                            "placeholder": "answer"
+                        }
+                    }),
+                )?;
+            }
+            (Some("textDocument/rename"), Some(id)) => {
+                let uri = text_document_uri(&message);
+                let new_name = message
+                    .get("params")
+                    .and_then(|params| params.get("newName"))
+                    .cloned()
+                    .unwrap_or_else(|| json!("renamed"));
+                let mut changes = serde_json::Map::new();
+                changes.insert(
+                    uri,
+                    Value::Array(vec![json!({
+                        "range": symbol_range(),
+                        "newText": new_name
+                    })]),
+                );
+                write_message(
+                    &mut writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {
+                            "changes": changes
+                        }
+                    }),
+                )?;
+            }
+            (Some("textDocument/documentSymbol"), Some(id)) => {
+                write_message(
+                    &mut writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": [
+                            {
+                                "name": "answer",
+                                "detail": "fn() -> u32",
+                                "kind": 12,
+                                "range": {
+                                    "start": { "line": 1, "character": 0 },
+                                    "end": { "line": 3, "character": 1 }
+                                },
+                                "selectionRange": symbol_range(),
+                                "children": []
+                            }
+                        ]
+                    }),
+                )?;
+            }
+            (Some("workspace/symbol"), Some(id)) => {
+                let query = message
+                    .get("params")
+                    .and_then(|params| params.get("query"))
+                    .cloned()
+                    .unwrap_or_else(|| json!(""));
+                let query = query.as_str().unwrap_or_default();
+                write_message(
+                    &mut writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": [
+                            {
+                                "name": query,
+                                "kind": 12,
+                                "location": {
+                                    "uri": format!("file:///workspace/{query}.rs"),
+                                    "range": symbol_range()
+                                },
+                                "containerName": "crate"
+                            }
+                        ]
                     }),
                 )?;
             }
@@ -369,4 +548,28 @@ fn record_notification(
             }
         }),
     )
+}
+
+fn text_document_uri(message: &Value) -> String {
+    message
+        .get("params")
+        .and_then(|params| params.get("textDocument"))
+        .and_then(|document| document.get("uri"))
+        .and_then(Value::as_str)
+        .unwrap_or("file:///workspace/src/lib.rs")
+        .to_owned()
+}
+
+fn hover_range() -> Value {
+    json!({
+        "start": { "line": 1, "character": 3 },
+        "end": { "line": 1, "character": 9 }
+    })
+}
+
+fn symbol_range() -> Value {
+    json!({
+        "start": { "line": 1, "character": 3 },
+        "end": { "line": 1, "character": 9 }
+    })
 }

@@ -5,6 +5,15 @@
 - Upstream repository: `rust-lang/rust-analyzer`
 - Role in this project: Language Server Protocol backend for Rust code intelligence
 
+## Reuse Policy
+
+This repository should reuse the crates already aligned with the rust-analyzer stack wherever practical:
+
+- use [`lsp-server`](/Users/0xdrun/rust-lsp-mcp/docs/integration/lsp-server.md) for transport framing and message primitives
+- use [`lsp-types`](/Users/0xdrun/rust-lsp-mcp/docs/integration/lsp-types.md) for standard LSP protocol data types
+
+The local code should focus on process ownership, session lifecycle, synchronization, and MCP-oriented normalization rather than reimplementing standard protocol structures.
+
 ## Verified Protocol Model
 
 `rust-analyzer` is a Language Server Protocol server speaking JSON-RPC 2.0. The normal deployment model is one client spawning and owning one `rust-analyzer` process. The primary transport used in practice is `stdio`. TCP is supported in principle, but `stdio` is the expected transport for this project and matches the chosen implementation direction.
@@ -223,7 +232,7 @@ Important consequences for the wrapper:
 The future MCP layer should:
 
 - spawn and manage one rust-analyzer child process per workspace root
-- implement JSON-RPC over `stdio`
+- communicate over `stdio` using `lsp-server` transport/message primitives
 - own LSP initialization and shutdown
 - maintain synchronized document state internally
 - expose one MCP tool per request/response capability where the mapping is clean

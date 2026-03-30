@@ -1,6 +1,4 @@
-use rust_lsp_mcp::{
-    WatchedFileChange, WatchedFileChangeKind, WorkspaceSessionBuilder, WorkspaceSessionError,
-};
+use rust_lsp_mcp::{FileChangeType, FileEvent, WorkspaceSessionBuilder, WorkspaceSessionError};
 use serde_json::{Value, json};
 use std::error::Error;
 use std::fs;
@@ -18,22 +16,23 @@ fn synchronizes_open_change_save_and_close() -> Result<(), Box<dyn Error>> {
     session.initialize()?;
 
     let opened = session.open_document(&file_path, "rust", 1, "fn main() {}\n")?;
-    assert_eq!(opened.version, 1);
-    assert_eq!(opened.text, "fn main() {}\n");
+    assert_eq!(opened.version(), 1);
+    assert_eq!(opened.text(), "fn main() {}\n");
     assert_eq!(session.open_documents()?.len(), 1);
 
     let changed = session.change_document(&file_path, 2, "fn main() { println!(\"hi\"); }\n")?;
-    assert_eq!(changed.version, 2);
-    assert_eq!(changed.text, "fn main() { println!(\"hi\"); }\n");
+    assert_eq!(changed.version(), 2);
+    assert_eq!(changed.text(), "fn main() { println!(\"hi\"); }\n");
     session.save_document(&file_path)?;
 
     let uri = session
         .document(&file_path)?
         .expect("tracked document after save")
-        .uri
+        .uri()
         .clone();
+    let uri_text = uri.as_str().to_owned();
     let state = session.request("state", json!({}))?;
-    let server_document = state["open_documents"][&uri].clone();
+    let server_document = state["open_documents"][&uri_text].clone();
     assert_eq!(server_document["languageId"], "rust");
     assert_eq!(server_document["version"], 2);
     assert_eq!(server_document["text"], "fn main() { println!(\"hi\"); }\n");
@@ -46,17 +45,17 @@ fn synchronizes_open_change_save_and_close() -> Result<(), Box<dyn Error>> {
     );
 
     let closed = session.close_document(&file_path)?;
-    assert_eq!(closed.uri, uri);
+    assert_eq!(closed.uri(), &uri);
     assert!(session.document(&file_path)?.is_none());
 
     let state = session.request("state", json!({}))?;
-    assert!(state["open_documents"].get(&uri).is_none());
+    assert!(state["open_documents"].get(&uri_text).is_none());
     assert!(
         state["closed_documents"]
             .as_array()
             .expect("closed documents")
             .iter()
-            .any(|value| value == &Value::String(uri.clone()))
+            .any(|value| value == &Value::String(uri_text.clone()))
     );
 
     session.shutdown()?;
@@ -81,10 +80,10 @@ fn forwards_workspace_configuration_and_watched_file_changes() -> Result<(), Box
             "checkOnSave": false
         }
     }))?;
-    session.change_watched_files([WatchedFileChange {
-        path: cargo_toml.clone(),
-        kind: WatchedFileChangeKind::Changed,
-    }])?;
+    session.change_watched_files([FileEvent::new(
+        path_to_file_uri(&fs::canonicalize(&cargo_toml)?).parse()?,
+        FileChangeType::CHANGED,
+    )])?;
 
     let state = session.request("state", json!({}))?;
     assert_eq!(
@@ -185,7 +184,7 @@ fn normalizes_dot_segments_for_document_tracking() -> Result<(), Box<dyn Error>>
     let tracked = session
         .document(&file_path)?
         .expect("tracked document through canonical path");
-    assert_eq!(tracked.version, 2);
+    assert_eq!(tracked.version(), 2);
     assert_eq!(tracked.path, fs::canonicalize(&file_path)?);
 
     session.shutdown()?;
@@ -216,7 +215,7 @@ fn resolves_symlinked_document_paths_to_the_same_entry() -> Result<(), Box<dyn E
     let tracked = session
         .document(&real_path)?
         .expect("tracked document through real path");
-    assert_eq!(tracked.version, 2);
+    assert_eq!(tracked.version(), 2);
     assert_eq!(tracked.path, fs::canonicalize(&real_path)?);
 
     session.shutdown()?;
