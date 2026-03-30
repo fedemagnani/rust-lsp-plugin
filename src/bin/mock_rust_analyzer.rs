@@ -23,6 +23,8 @@ fn main() -> io::Result<()> {
     let mut closed_documents = Vec::new();
     let mut configuration_changes = Vec::new();
     let mut watched_file_changes = Vec::new();
+    let mut reload_workspace_requests = 0u64;
+    let mut rebuild_proc_macro_requests = 0u64;
     let mut shutdown_requested = false;
     let mut initialize_params = None;
     let mut initialized_received = false;
@@ -255,6 +257,152 @@ fn main() -> io::Result<()> {
                     }),
                 )?;
             }
+            (Some("rust-analyzer/analyzerStatus"), Some(id)) => {
+                let uri = message
+                    .get("params")
+                    .and_then(|params| params.get("textDocument"))
+                    .and_then(|text_document| text_document.get("uri"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("workspace");
+                write_message(
+                    &mut writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": format!("status:{uri}")
+                    }),
+                )?;
+            }
+            (Some("rust-analyzer/fetchDependencyList"), Some(id)) => {
+                write_message(
+                    &mut writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {
+                            "crates": [
+                                {
+                                    "name": "serde",
+                                    "version": "1.0.0",
+                                    "path": "file:///deps/serde/Cargo.toml"
+                                }
+                            ]
+                        }
+                    }),
+                )?;
+            }
+            (Some("rust-analyzer/reloadWorkspace"), Some(id)) => {
+                reload_workspace_requests += 1;
+                write_message(
+                    &mut writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": null
+                    }),
+                )?;
+            }
+            (Some("rust-analyzer/rebuildProcMacros"), Some(id)) => {
+                rebuild_proc_macro_requests += 1;
+                write_message(
+                    &mut writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": null
+                    }),
+                )?;
+            }
+            (Some("rust-analyzer/viewSyntaxTree"), Some(id)) => {
+                let uri = text_document_uri(&message);
+                write_message(
+                    &mut writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": format!("syntax tree for {uri}")
+                    }),
+                )?;
+            }
+            (Some("rust-analyzer/viewHir"), Some(id)) => {
+                write_message(
+                    &mut writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": "hir debug output"
+                    }),
+                )?;
+            }
+            (Some("rust-analyzer/viewMir"), Some(id)) => {
+                write_message(
+                    &mut writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": "mir debug output"
+                    }),
+                )?;
+            }
+            (Some("rust-analyzer/expandMacro"), Some(id)) => {
+                write_message(
+                    &mut writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {
+                            "name": "println!",
+                            "expansion": "std::io::_print(format_args!(\"hi\"))"
+                        }
+                    }),
+                )?;
+            }
+            (Some("experimental/runnables"), Some(id)) => {
+                write_message(
+                    &mut writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": [
+                            {
+                                "label": "cargo test answer",
+                                "kind": "cargo",
+                                "args": {
+                                    "cargoArgs": ["test", "answer"],
+                                    "executableArgs": ["--exact"],
+                                    "cwd": "/workspace",
+                                    "workspaceRoot": "/workspace",
+                                    "environment": {}
+                                }
+                            }
+                        ]
+                    }),
+                )?;
+            }
+            (Some("rust-analyzer/relatedTests"), Some(id)) => {
+                write_message(
+                    &mut writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": [
+                            {
+                                "runnable": {
+                                    "label": "cargo test related_case",
+                                    "kind": "cargo",
+                                    "args": {
+                                        "cargoArgs": ["test", "related_case"],
+                                        "executableArgs": [],
+                                        "cwd": "/workspace",
+                                        "workspaceRoot": "/workspace",
+                                        "environment": {}
+                                    }
+                                }
+                            }
+                        ]
+                    }),
+                )?;
+            }
             (Some("server_request"), Some(id)) => {
                 write_message(
                     &mut writer,
@@ -289,6 +437,8 @@ fn main() -> io::Result<()> {
                             "initialized_received": initialized_received,
                             "notifications": notifications,
                             "open_documents": open_documents,
+                            "rebuild_proc_macro_requests": rebuild_proc_macro_requests,
+                            "reload_workspace_requests": reload_workspace_requests,
                             "shutdown_requested": shutdown_requested
                             ,
                             "watched_file_changes": watched_file_changes
