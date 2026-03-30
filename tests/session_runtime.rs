@@ -1,6 +1,6 @@
 #![allow(missing_docs)]
 
-use rust_lsp_mcp::{JsonRpcId, ServerRequest, Session, SessionBuilder, SessionEvent};
+use rust_lsp_mcp::{Request, RequestId, Session, SessionBuilder, SessionEvent};
 use serde_json::json;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
@@ -75,10 +75,10 @@ fn session_correlates_requests_and_notifications() {
     }
 
     match recv_event(&events) {
-        SessionEvent::Notification { method, params } => {
-            assert_eq!(method, "$/progress");
+        SessionEvent::Notification(notification) => {
+            assert_eq!(notification.method, "$/progress");
             assert_eq!(
-                params.expect("progress params")["token"],
+                notification.params["token"],
                 json!("mock-progress")
             );
         }
@@ -106,10 +106,10 @@ fn session_exposes_server_requests_and_supports_cancellation() {
     assert_eq!(response, json!({"status": "request-sent"}));
 
     match recv_event(&events) {
-        SessionEvent::ServerRequest(ServerRequest { id, method, params }) => {
-            assert_eq!(id, JsonRpcId::String("config-1".into()));
+        SessionEvent::ServerRequest(Request { id, method, params }) => {
+            assert_eq!(id, RequestId::from("config-1".to_owned()));
             assert_eq!(method, "workspace/configuration");
-            assert_eq!(params, Some(json!({"items": []})));
+            assert_eq!(params, json!({"items": []}));
             session
                 .respond(id, json!([]))
                 .expect("respond to server request");
@@ -118,7 +118,7 @@ fn session_exposes_server_requests_and_supports_cancellation() {
     }
 
     session
-        .cancel_request(JsonRpcId::Integer(42))
+        .cancel_request(RequestId::from(42))
         .expect("cancel request");
     let state = session
         .request("state", json!(null))

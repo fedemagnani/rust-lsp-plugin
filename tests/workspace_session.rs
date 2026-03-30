@@ -1,8 +1,8 @@
 #![allow(missing_docs)]
 
 use rust_lsp_mcp::{
-    SessionEvent, WorkspaceLoadingState, WorkspaceSessionBuilder, WorkspaceSessionError,
-    WorkspaceSessionPhase,
+    HoverProviderCapability, PositionEncodingKind, SessionEvent, WorkspaceLoadingState,
+    WorkspaceSessionBuilder, WorkspaceSessionError, WorkspaceSessionPhase,
 };
 use serde_json::json;
 use std::path::PathBuf;
@@ -47,14 +47,17 @@ fn workspace_session_initializes_and_reaches_ready_state() {
     let ready = session.initialize().expect("initialize workspace").clone();
 
     assert_eq!(session.phase(), WorkspaceSessionPhase::Ready);
-    assert_eq!(ready.server_capabilities["hoverProvider"], json!(true));
     assert_eq!(
-        ready.server_capabilities["positionEncoding"],
-        json!("utf-8")
+        ready.server_capabilities.hover_provider,
+        Some(HoverProviderCapability::Simple(true))
     );
     assert_eq!(
-        ready.server_info.as_ref().expect("server info")["name"],
-        json!("mock-rust-analyzer")
+        ready.server_capabilities.position_encoding,
+        Some(PositionEncodingKind::UTF8)
+    );
+    assert_eq!(
+        ready.server_info.as_ref().expect("server info").name,
+        "mock-rust-analyzer"
     );
     assert!(ready.configuration_requested);
     assert_eq!(ready.loading_state, WorkspaceLoadingState::Ready);
