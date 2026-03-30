@@ -548,10 +548,9 @@ fn main() -> io::Result<()> {
                 if let Some(document) = message
                     .get("params")
                     .and_then(|params| params.get("textDocument"))
+                    && let Some(uri) = document.get("uri").and_then(Value::as_str)
                 {
-                    if let Some(uri) = document.get("uri").and_then(Value::as_str) {
-                        open_documents.insert(uri.to_owned(), document.clone());
-                    }
+                    open_documents.insert(uri.to_owned(), document.clone());
                 }
             }
             (Some("textDocument/didChange"), None) => {
@@ -572,11 +571,11 @@ fn main() -> io::Result<()> {
                         .and_then(|change| change.get("text"))
                         .cloned();
 
-                    if let (Some(uri), Some(version), Some(text)) = (uri, version, text) {
-                        if let Some(document) = open_documents.get_mut(uri) {
-                            document["version"] = version;
-                            document["text"] = text;
-                        }
+                    if let (Some(uri), Some(version), Some(text)) = (uri, version, text)
+                        && let Some(document) = open_documents.get_mut(uri)
+                    {
+                        document["version"] = version;
+                        document["text"] = text;
                     }
                 }
             }
