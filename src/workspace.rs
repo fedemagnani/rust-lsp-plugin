@@ -2,11 +2,15 @@
 
 use crate::lsp::{
     ClientCapabilities, ClientInfo, CompletionContext, CompletionParams, CompletionResponse,
-    DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse,
-    Hover, HoverParams, InitializeParams, InitializeResult, InitializedParams, Position,
-    PrepareRenameResponse, ReferenceContext, ReferenceParams, RenameParams, ServerCapabilities,
-    ServerInfo, TextDocumentIdentifier, TextDocumentPositionParams, TraceValue, Uri,
-    WorkspaceEdit, WorkspaceFolder, WorkspaceSymbolParams, WorkspaceSymbolResponse,
+    DidChangeTextDocumentParams, DidChangeWatchedFilesParams, DidCloseTextDocumentParams,
+    DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentSymbolParams,
+    DocumentSymbolResponse, FileEvent, GotoDefinitionParams,
+    GotoDefinitionResponse, Hover, HoverParams, InitializeParams, InitializeResult,
+    InitializedParams, Position, PrepareRenameResponse, ReferenceContext, ReferenceParams,
+    RenameParams, ServerCapabilities, ServerInfo, TextDocumentContentChangeEvent,
+    TextDocumentIdentifier, TextDocumentItem, TextDocumentPositionParams, TraceValue, Uri,
+    VersionedTextDocumentIdentifier, WorkspaceEdit, WorkspaceFolder, WorkspaceSymbolParams,
+    WorkspaceSymbolResponse,
 };
 use crate::{Session, SessionBuilder, SessionError, SessionEvent};
 use serde::{Serialize, de::DeserializeOwned};
@@ -62,45 +66,35 @@ pub struct WorkspaceReadyState {
     pub loading_state: WorkspaceLoadingState,
 }
 
-/// File change kind used by `workspace/didChangeWatchedFiles`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WatchedFileChangeKind {
-    /// The file was created.
-    Created = 1,
-    /// The file contents changed.
-    Changed = 2,
-    /// The file was deleted.
-    Deleted = 3,
-}
-
-impl WatchedFileChangeKind {
-    fn as_lsp_kind(self) -> i64 {
-        self as i64
-    }
-}
-
-/// A watched-file change notification entry.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WatchedFileChange {
-    /// Absolute file-system path for the changed file.
-    pub path: PathBuf,
-    /// Observed change kind.
-    pub kind: WatchedFileChangeKind,
-}
-
 /// Locally tracked state for an open text document.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrackedDocument {
     /// Absolute file-system path for the document.
     pub path: PathBuf,
+    /// Canonical LSP text document item mirrored to the server.
+    pub text_document: TextDocumentItem,
+}
+
+impl TrackedDocument {
     /// File URI sent to the server.
-    pub uri: Uri,
+    pub fn uri(&self) -> &Uri {
+        &self.text_document.uri
+    }
+
     /// Language identifier used when the document was opened.
-    pub language_id: String,
+    pub fn language_id(&self) -> &str {
+        &self.text_document.language_id
+    }
+
     /// Most recent synchronized document version.
-    pub version: i32,
+    pub fn version(&self) -> i32 {
+        self.text_document.version
+    }
+
     /// Most recent synchronized document contents.
-    pub text: String,
+    pub fn text(&self) -> &str {
+        &self.text_document.text
+    }
 }
 
 /// Errors produced by the workspace session layer.
@@ -588,23 +582,20 @@ impl WorkspaceSession {
         }
 
         let tracked = TrackedDocument {
-            uri: parse_uri(&file_uri_from_path(&path)),
             path: path.clone(),
-            language_id: language_id.into(),
-            version,
-            text: text.into(),
+            text_document: TextDocumentItem::new(
+                parse_uri(&file_uri_from_path(&path)),
+                language_id.into(),
+                version,
+                text.into(),
+            ),
         };
 
         self.session.notify(
             "textDocument/didOpen",
-            json!({
-                "textDocument": {
-                    "uri": tracked.uri,
-                    "languageId": tracked.language_id,
-                    "version": tracked.version,
-                    "text": tracked.text,
-                }
-            }),
+            DidOpenTextDocumentParams {
+                text_document: tracked.text_document.clone(),
+            },
         )?;
 
         self.open_documents.insert(path.clone(), tracked);
@@ -626,10 +617,10 @@ impl WorkspaceSession {
             .get_mut(&path)
             .ok_or_else(|| WorkspaceSessionError::DocumentNotOpen { path: path.clone() })?;
 
-        if version <= tracked.version {
+        if version <= tracked.version() {
             return Err(WorkspaceSessionError::NonMonotonicDocumentVersion {
                 path,
-                current_version: tracked.version,
+                current_version: tracked.version(),
                 new_version: version,
             });
         }
@@ -637,21 +628,21 @@ impl WorkspaceSession {
         let text = text.into();
         self.session.notify(
             "textDocument/didChange",
-            json!({
-                "textDocument": {
-                    "uri": tracked.uri,
-                    "version": version,
-                },
-                "contentChanges": [
-                    {
-                        "text": text,
-                    }
-                ],
-            }),
+            DidChangeTextDocumentParams {
+                text_document: VersionedTextDocumentIdentifier::new(
+                    tracked.text_document.uri.clone(),
+                    version,
+                ),
+                content_changes: vec![TextDocumentContentChangeEvent {
+                    range: None,
+                    range_length: None,
+                    text: text.clone(),
+                }],
+            },
         )?;
 
-        tracked.version = version;
-        tracked.text = text;
+        tracked.text_document.version = version;
+        tracked.text_document.text = text;
         Ok(tracked)
     }
 
@@ -670,11 +661,10 @@ impl WorkspaceSession {
 
         self.session.notify(
             "textDocument/didSave",
-            json!({
-                "textDocument": {
-                    "uri": tracked.uri,
-                }
-            }),
+            DidSaveTextDocumentParams {
+                text_document: TextDocumentIdentifier::new(tracked.text_document.uri.clone()),
+                text: None,
+            },
         )?;
 
         Ok(tracked)
@@ -695,11 +685,9 @@ impl WorkspaceSession {
 
         self.session.notify(
             "textDocument/didClose",
-            json!({
-                "textDocument": {
-                    "uri": tracked.uri,
-                }
-            }),
+            DidCloseTextDocumentParams {
+                text_document: TextDocumentIdentifier::new(tracked.text_document.uri.clone()),
+            },
         )?;
 
         Ok(self
@@ -724,23 +712,14 @@ impl WorkspaceSession {
     /// Pushes watched-file changes that can affect workspace analysis.
     pub fn change_watched_files(
         &self,
-        changes: impl IntoIterator<Item = WatchedFileChange>,
+        changes: impl IntoIterator<Item = FileEvent>,
     ) -> Result<(), WorkspaceSessionError> {
         self.ensure_ready("change_watched_files")?;
-        let changes = changes
-            .into_iter()
-            .map(|change| {
-                let path = absolutize_path(change.path)?;
-                Ok(json!({
-                    "uri": file_uri_from_path(&path),
-                    "type": change.kind.as_lsp_kind(),
-                }))
-            })
-            .collect::<Result<Vec<_>, SessionError>>()?;
+        let changes = changes.into_iter().collect::<Vec<_>>();
 
         self.session.notify(
             "workspace/didChangeWatchedFiles",
-            json!({ "changes": changes }),
+            DidChangeWatchedFilesParams { changes },
         )?;
         Ok(())
     }
@@ -772,6 +751,7 @@ impl WorkspaceSession {
         Ok(())
     }
 
+    #[allow(deprecated)]
     fn initialize_params(&self) -> InitializeParams {
         InitializeParams {
             process_id: None,
@@ -858,7 +838,7 @@ impl WorkspaceSession {
         Ok(self
             .open_documents
             .get(&path)
-            .map(|document| document.uri.as_str().to_owned())
+            .map(|document| document.uri().as_str().to_owned())
             .unwrap_or_else(|| file_uri_from_path(&path)))
     }
 

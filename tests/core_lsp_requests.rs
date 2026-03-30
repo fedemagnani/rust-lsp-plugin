@@ -125,7 +125,11 @@ fn exposes_typed_core_lsp_requests() -> Result<(), Box<dyn Error>> {
     )?
         .expect("rename edit");
     let changes = edit.changes.expect("rename changes");
-    let file_uri = session.document(&file_path)?.expect("tracked document").uri.clone();
+    let file_uri = session
+        .document(&file_path)?
+        .expect("tracked document")
+        .uri()
+        .clone();
     let edits = changes.get(&file_uri).expect("edits for file");
     assert_eq!(edits.len(), 1);
     assert_eq!(edits[0].new_text, "meaning");

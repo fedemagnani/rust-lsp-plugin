@@ -10,7 +10,6 @@ pub use session::{
     Session, SessionBuilder, SessionError, SessionEvent,
 };
 pub use workspace::{
-    TrackedDocument, WatchedFileChange, WatchedFileChangeKind, WorkspaceLoadingState,
-    WorkspaceReadyState, WorkspaceSession, WorkspaceSessionBuilder, WorkspaceSessionError,
-    WorkspaceSessionPhase,
+    TrackedDocument, WorkspaceLoadingState, WorkspaceReadyState, WorkspaceSession,
+    WorkspaceSessionBuilder, WorkspaceSessionError, WorkspaceSessionPhase,
 };
