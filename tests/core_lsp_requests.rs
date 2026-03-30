@@ -116,13 +116,13 @@ fn exposes_typed_core_lsp_requests() -> Result<(), Box<dyn Error>> {
 
     let edit = session
         .rename(
-        &file_path,
-        Position {
-            line: 5,
-            character: 4,
-        },
-        "meaning",
-    )?
+            &file_path,
+            Position {
+                line: 5,
+                character: 4,
+            },
+            "meaning",
+        )?
         .expect("rename edit");
     let changes = edit.changes.expect("rename changes");
     let file_uri = session

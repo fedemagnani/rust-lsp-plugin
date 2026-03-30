@@ -4,14 +4,15 @@ use crate::lsp::{
     ClientCapabilities, ClientInfo, CompletionContext, CompletionParams, CompletionResponse,
     DidChangeTextDocumentParams, DidChangeWatchedFilesParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentSymbolParams,
-    DocumentSymbolResponse, FileEvent, GotoDefinitionParams,
-    GotoDefinitionResponse, Hover, HoverParams, InitializeParams, InitializeResult,
-    InitializedParams, Position, PrepareRenameResponse, ReferenceContext, ReferenceParams,
-    RenameParams, ServerCapabilities, ServerInfo, TextDocumentContentChangeEvent,
-    TextDocumentIdentifier, TextDocumentItem, TextDocumentPositionParams, TraceValue, Uri,
-    VersionedTextDocumentIdentifier, WorkspaceEdit, WorkspaceFolder, WorkspaceSymbolParams,
-    WorkspaceSymbolResponse,
+    DocumentSymbolResponse, FileEvent, GotoDefinitionParams, GotoDefinitionResponse, Hover,
+    HoverParams, InitializeParams, InitializeResult, InitializedParams, Position,
+    PrepareRenameResponse, ReferenceContext, ReferenceParams, RenameParams, ServerCapabilities,
+    ServerInfo, TextDocumentContentChangeEvent, TextDocumentIdentifier, TextDocumentItem,
+    TextDocumentPositionParams, TraceValue, Uri, VersionedTextDocumentIdentifier, WorkspaceEdit,
+    WorkspaceFolder, WorkspaceSymbolParams, WorkspaceSymbolResponse,
+    request::Request as LspRequest,
 };
+use crate::rust_analyzer as ra;
 use crate::{Session, SessionBuilder, SessionError, SessionEvent};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -354,12 +355,14 @@ impl WorkspaceSession {
         self.phase = WorkspaceSessionPhase::Initializing;
 
         let result: Result<(), WorkspaceSessionError> = (|| {
-            let initialize_result: InitializeResult =
-                serde_json::from_value(self.session.request("initialize", self.initialize_params())?)
-                    .map_err(|source| WorkspaceSessionError::InvalidResponse {
-                        method: "initialize",
-                        source,
-                    })?;
+            let initialize_result: InitializeResult = serde_json::from_value(
+                self.session
+                    .request("initialize", self.initialize_params())?,
+            )
+            .map_err(|source| WorkspaceSessionError::InvalidResponse {
+                method: "initialize",
+                source,
+            })?;
 
             self.session.notify("initialized", InitializedParams {})?;
 
@@ -412,6 +415,16 @@ impl WorkspaceSession {
     {
         self.ensure_ready("request")?;
         Ok(self.session.request(method, params)?)
+    }
+
+    /// Sends a typed standard-LSP or rust-analyzer extension request.
+    pub fn request_typed<R>(&self, params: R::Params) -> Result<R::Result, WorkspaceSessionError>
+    where
+        R: LspRequest,
+        R::Params: Serialize,
+        R::Result: DeserializeOwned,
+    {
+        self.typed_request::<R::Result, _>(R::METHOD, params)
     }
 
     /// Performs `textDocument/hover`.
@@ -547,14 +560,111 @@ impl WorkspaceSession {
         &self,
         query: impl Into<String>,
     ) -> Result<Option<WorkspaceSymbolResponse>, WorkspaceSessionError> {
-        self.typed_request(
-            "workspace/symbol",
-            WorkspaceSymbolParams {
-                query: query.into(),
-                work_done_progress_params: Default::default(),
-                partial_result_params: Default::default(),
+        self.request_typed::<crate::lsp::request::WorkspaceSymbolRequest>(WorkspaceSymbolParams {
+            query: query.into(),
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        })
+    }
+
+    /// Performs `rust-analyzer/analyzerStatus`.
+    pub fn analyzer_status(
+        &self,
+        path: Option<impl AsRef<Path>>,
+    ) -> Result<String, WorkspaceSessionError> {
+        self.request_typed::<ra::AnalyzerStatus>(ra::AnalyzerStatusParams {
+            text_document: match path {
+                Some(path) => Some(self.text_document_identifier(path)?),
+                None => None,
             },
-        )
+        })
+    }
+
+    /// Performs `rust-analyzer/fetchDependencyList`.
+    pub fn fetch_dependency_list(
+        &self,
+    ) -> Result<ra::FetchDependencyListResult, WorkspaceSessionError> {
+        self.request_typed::<ra::FetchDependencyList>(ra::FetchDependencyListParams::default())
+    }
+
+    /// Performs `rust-analyzer/reloadWorkspace`.
+    pub fn reload_workspace(&self) -> Result<(), WorkspaceSessionError> {
+        self.request_typed::<ra::ReloadWorkspace>(())
+    }
+
+    /// Performs `rust-analyzer/rebuildProcMacros`.
+    pub fn rebuild_proc_macros(&self) -> Result<(), WorkspaceSessionError> {
+        self.request_typed::<ra::RebuildProcMacros>(())
+    }
+
+    /// Performs `rust-analyzer/viewSyntaxTree`.
+    pub fn view_syntax_tree(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<String, WorkspaceSessionError> {
+        self.request_typed::<ra::ViewSyntaxTree>(ra::ViewSyntaxTreeParams {
+            text_document: self.text_document_identifier(path)?,
+        })
+    }
+
+    /// Performs `rust-analyzer/viewHir`.
+    pub fn view_hir(
+        &self,
+        path: impl AsRef<Path>,
+        position: Position,
+    ) -> Result<String, WorkspaceSessionError> {
+        self.request_typed::<ra::ViewHir>(text_document_position_params(
+            self.text_document_identifier(path)?,
+            position,
+        ))
+    }
+
+    /// Performs `rust-analyzer/viewMir`.
+    pub fn view_mir(
+        &self,
+        path: impl AsRef<Path>,
+        position: Position,
+    ) -> Result<String, WorkspaceSessionError> {
+        self.request_typed::<ra::ViewMir>(text_document_position_params(
+            self.text_document_identifier(path)?,
+            position,
+        ))
+    }
+
+    /// Performs `rust-analyzer/expandMacro`.
+    pub fn expand_macro(
+        &self,
+        path: impl AsRef<Path>,
+        position: Position,
+    ) -> Result<Option<ra::ExpandedMacro>, WorkspaceSessionError> {
+        self.request_typed::<ra::ExpandMacro>(ra::ExpandMacroParams {
+            text_document: self.text_document_identifier(path)?,
+            position,
+        })
+    }
+
+    /// Performs `experimental/runnables`.
+    pub fn runnables(
+        &self,
+        path: impl AsRef<Path>,
+        position: Option<Position>,
+    ) -> Result<Vec<ra::Runnable>, WorkspaceSessionError> {
+        self.request_typed::<ra::Runnables>(ra::RunnablesParams {
+            text_document: self.text_document_identifier(path)?,
+            position,
+        })
+    }
+
+    /// Performs `rust-analyzer/relatedTests`.
+    pub fn related_tests(
+        &self,
+        path: impl AsRef<Path>,
+        position: Position,
+    ) -> Result<Vec<ra::TestInfo>, WorkspaceSessionError> {
+        self.request_typed::<ra::RelatedTests>(text_document_position_params(
+            self.text_document_identifier(path)?,
+            position,
+        ))
     }
 
     /// Sends a notification after the session reaches the ready phase.
@@ -753,7 +863,6 @@ impl WorkspaceSession {
 
     #[allow(deprecated)]
     fn initialize_params(&self) -> InitializeParams {
-    fn initialize_params(&self) -> InitializeParams {
         InitializeParams {
             process_id: None,
             root_path: Some(self.workspace_root.to_string_lossy().into_owned()),
@@ -780,6 +889,9 @@ impl WorkspaceSession {
     ) -> Result<Option<SessionEvent>, WorkspaceSessionError> {
         match self.events.recv_timeout(timeout) {
             Ok(event) => Ok(Some(event)),
+            Err(RecvTimeoutError::Timeout) if self.session.is_terminated() => {
+                Err(SessionError::Disconnected.into())
+            }
             Err(RecvTimeoutError::Timeout) => Ok(None),
             Err(RecvTimeoutError::Disconnected) => Err(SessionError::Disconnected.into()),
         }

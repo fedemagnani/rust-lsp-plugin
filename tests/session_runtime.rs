@@ -77,10 +77,7 @@ fn session_correlates_requests_and_notifications() {
     match recv_event(&events) {
         SessionEvent::Notification(notification) => {
             assert_eq!(notification.method, "$/progress");
-            assert_eq!(
-                notification.params["token"],
-                json!("mock-progress")
-            );
+            assert_eq!(notification.params["token"], json!("mock-progress"));
         }
         other => panic!("unexpected notification event: {other:?}"),
     }
