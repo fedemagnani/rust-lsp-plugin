@@ -210,9 +210,12 @@ impl From<WorkspaceSessionError> for ServerError {
             WorkspaceSessionError::MissingEventReceiver => {
                 Self::internal("workspace session is missing its event receiver")
             }
-            WorkspaceSessionError::DocumentNotOpen { path }
-            | WorkspaceSessionError::DocumentAlreadyOpen { path } => {
+            WorkspaceSessionError::DocumentNotOpen { path } => {
                 Self::document_not_available(path)
+            }
+            WorkspaceSessionError::DocumentAlreadyOpen { path } => {
+                Self::invalid_input(format!("document is already open: {}", path.display()))
+                    .with_details(json!({ "document_path": path }))
             }
             WorkspaceSessionError::NonMonotonicDocumentVersion {
                 path,
