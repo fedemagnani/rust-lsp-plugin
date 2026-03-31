@@ -121,6 +121,10 @@ fn server_error_maps_session_and_workspace_failures_into_stable_taxonomy() {
     let timeout_data = timeout.to_error_data();
     assert_eq!(timeout_data.code, ErrorCode(-32001));
 
+    let disconnected = ServerError::from(SessionError::Disconnected);
+    assert_eq!(disconnected.kind, ServerErrorKind::Internal);
+    assert!(!disconnected.retriable);
+
     let invalid_phase = ServerError::from(WorkspaceSessionError::InvalidPhase {
         operation: "open_document",
         phase: rust_lsp_mcp::WorkspaceSessionPhase::PreInitialize,

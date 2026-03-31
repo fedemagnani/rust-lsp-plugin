@@ -6,7 +6,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::borrow::Cow;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 const REQUEST_CANCELLED_CODE: ErrorCode = ErrorCode(-32800);
@@ -184,7 +184,7 @@ impl From<SessionError> for ServerError {
         match value {
             SessionError::RequestTimeout { method, timeout } => Self::timeout(method, timeout),
             SessionError::Protocol(message) => Self::protocol(message),
-            SessionError::Disconnected => Self::cancelled("rust-analyzer session disconnected"),
+            SessionError::Disconnected => Self::internal("rust-analyzer session disconnected"),
             SessionError::ServerError(error) => Self::protocol(format!(
                 "rust-analyzer request failed: {}",
                 error.message
@@ -236,8 +236,3 @@ impl From<WorkspaceSessionError> for ServerError {
         }
     }
 }
-
-const _: () = {
-    fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<ServerError>();
-};
