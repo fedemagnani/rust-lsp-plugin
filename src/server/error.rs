@@ -1,6 +1,6 @@
 //! Stable MCP-facing error taxonomy for rust-analyzer-backed tools.
 
-use crate::{SessionError, WorkspaceSessionError};
+use crate::{SessionError, WorkspaceSessionError, WorkspaceSessionPhase};
 use rmcp::{ErrorData, model::ErrorCode};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -203,10 +203,24 @@ impl From<WorkspaceSessionError> for ServerError {
     fn from(value: WorkspaceSessionError) -> Self {
         match value {
             WorkspaceSessionError::Session(error) => error.into(),
-            WorkspaceSessionError::InvalidPhase { operation, phase } => Self::not_ready(format!(
-                "operation {operation} is invalid while workspace session is in phase {phase:?}"
-            ))
-            .with_operation(operation),
+            WorkspaceSessionError::InvalidPhase { operation, phase } => {
+                let error = match phase {
+                    WorkspaceSessionPhase::PreInitialize | WorkspaceSessionPhase::Initializing => {
+                        Self::not_ready(format!(
+                            "operation {operation} is invalid while workspace session is in phase {phase:?}"
+                        ))
+                    }
+                    WorkspaceSessionPhase::Failed | WorkspaceSessionPhase::Shutdown => {
+                        Self::internal(format!(
+                            "operation {operation} is invalid while workspace session is in phase {phase:?}"
+                        ))
+                    }
+                    WorkspaceSessionPhase::Ready => Self::internal(format!(
+                        "operation {operation} is invalid while workspace session is in phase {phase:?}"
+                    )),
+                };
+                error.with_operation(operation)
+            }
             WorkspaceSessionError::MissingEventReceiver => {
                 Self::internal("workspace session is missing its event receiver")
             }

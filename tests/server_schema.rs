@@ -132,6 +132,13 @@ fn server_error_maps_session_and_workspace_failures_into_stable_taxonomy() {
     assert_eq!(invalid_phase.kind, ServerErrorKind::NotReady);
     assert!(invalid_phase.retriable);
 
+    let failed_phase = ServerError::from(WorkspaceSessionError::InvalidPhase {
+        operation: "open_document",
+        phase: rust_lsp_mcp::WorkspaceSessionPhase::Failed,
+    });
+    assert_eq!(failed_phase.kind, ServerErrorKind::Internal);
+    assert!(!failed_phase.retriable);
+
     let missing_document = ServerError::from(WorkspaceSessionError::DocumentNotOpen {
         path: PathBuf::from("/workspace/src/lib.rs"),
     });
