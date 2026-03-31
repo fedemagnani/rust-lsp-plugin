@@ -295,3 +295,62 @@ pub struct MutatingToolResult<T> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace_edit: Option<WorkspaceEditSummary>,
 }
+
+/// Input for opening a document and synchronizing its contents with rust-analyzer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct OpenDocumentInput {
+    /// Absolute path to the workspace root managed by the server.
+    pub workspace_root: PathBuf,
+    /// Absolute path to the document to open.
+    pub document_path: PathBuf,
+    /// Language identifier for the document. Defaults to `"rust"` when omitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language_id: Option<String>,
+    /// Full text contents of the document.
+    pub text: String,
+}
+
+/// Input for updating the full contents of an already-open document.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ChangeDocumentInput {
+    /// Absolute path to the workspace root managed by the server.
+    pub workspace_root: PathBuf,
+    /// Absolute path to the open document.
+    pub document_path: PathBuf,
+    /// Monotonically increasing version for the document update.
+    pub version: i32,
+    /// Replacement full text of the document.
+    pub text: String,
+}
+
+/// Summary returned after a document is opened.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct OpenDocumentSummary {
+    /// Absolute path to the opened document.
+    pub document_path: PathBuf,
+    /// Version assigned to the opened document.
+    pub version: i32,
+}
+
+/// Summary returned after a document is updated.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ChangeDocumentSummary {
+    /// Absolute path to the updated document.
+    pub document_path: PathBuf,
+    /// New version of the document after the change.
+    pub version: i32,
+}
+
+/// Summary returned after a document is closed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CloseDocumentSummary {
+    /// Absolute path to the closed document.
+    pub document_path: PathBuf,
+}
+
+/// Summary returned after a rename operation completes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RenameSummary {
+    /// The new symbol name that was applied.
+    pub new_name: String,
+}
