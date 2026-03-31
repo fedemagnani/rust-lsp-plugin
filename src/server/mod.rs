@@ -454,8 +454,40 @@ fn normalize_range(range: Range) -> TextRange {
 fn uri_to_path(uri: &Uri) -> PathBuf {
     let raw = uri.as_str();
     raw.strip_prefix("file://")
-        .map(PathBuf::from)
+        .map(percent_decode_path)
         .unwrap_or_else(|| PathBuf::from(raw))
+}
+
+fn percent_decode_path(path: &str) -> PathBuf {
+    let bytes = path.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let high = from_hex_digit(bytes[index + 1]);
+            let low = from_hex_digit(bytes[index + 2]);
+            if let (Some(high), Some(low)) = (high, low) {
+                decoded.push((high << 4) | low);
+                index += 3;
+                continue;
+            }
+        }
+
+        decoded.push(bytes[index]);
+        index += 1;
+    }
+
+    PathBuf::from(String::from_utf8_lossy(&decoded).into_owned())
+}
+
+fn from_hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 #[tool_router]
@@ -652,5 +684,30 @@ impl ServerHandler for RustAnalyzerMcpServer {
             server_info: rmcp::model::Implementation::from_build_env(),
             ..Default::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{percent_decode_path, uri_to_path};
+    use crate::Uri;
+    use std::path::PathBuf;
+    use std::str::FromStr;
+
+    #[test]
+    fn file_uris_are_percent_decoded_before_path_conversion() {
+        let uri = Uri::from_str("file:///tmp/workspace/src/with%20space.rs").expect("valid uri");
+        assert_eq!(
+            uri_to_path(&uri),
+            PathBuf::from("/tmp/workspace/src/with space.rs")
+        );
+    }
+
+    #[test]
+    fn invalid_percent_sequences_are_preserved() {
+        assert_eq!(
+            percent_decode_path("/tmp/workspace/src/percent%2G.rs"),
+            PathBuf::from("/tmp/workspace/src/percent%2G.rs")
+        );
     }
 }
