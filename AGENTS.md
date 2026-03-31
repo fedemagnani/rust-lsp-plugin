@@ -20,9 +20,14 @@ Implementation preference:
 - avoid introducing local mirrors of standard LSP protocol types unless there is a clear MCP-facing normalization need
 - keep custom types focused on client state, lifecycle, and MCP-specific output shaping
 
+## Agent Skill
+
+- [Rust Analyzer Agent Skill](.agents/skills/rust-lsp-mcp/SKILL.md): when and how to use the
+  MCP tools for Rust codebase navigation, analysis, and refactoring
+
 ## Integrations
 
-- `rust-analyzer`: [docs/integration/rust-analyzer.md](/Users/0xdrun/rust-lsp-mcp/docs/integration/rust-analyzer.md)
-- `lsp-server`: [docs/integration/lsp-server.md](/Users/0xdrun/rust-lsp-mcp/docs/integration/lsp-server.md)
-- `lsp-types`: [docs/integration/lsp-types.md](/Users/0xdrun/rust-lsp-mcp/docs/integration/lsp-types.md)
-- `rmcp`: [docs/integration/rmcp.md](/Users/0xdrun/rust-lsp-mcp/docs/integration/rmcp.md)
+- `rust-analyzer`: [docs/integration/rust-analyzer.md](docs/integration/rust-analyzer.md)
+- `lsp-server`: [docs/integration/lsp-server.md](docs/integration/lsp-server.md)
+- `lsp-types`: [docs/integration/lsp-types.md](docs/integration/lsp-types.md)
+- `rmcp`: [docs/integration/rmcp.md](docs/integration/rmcp.md)
