@@ -69,6 +69,14 @@ pub struct ServerError {
     pub details: Option<Value>,
 }
 
+impl std::fmt::Display for ServerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for ServerError {}
+
 impl ServerError {
     /// Creates a new server error.
     pub fn new(kind: ServerErrorKind, message: impl Into<String>) -> Self {
