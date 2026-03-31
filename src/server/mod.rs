@@ -3,12 +3,18 @@
 mod error;
 mod schema;
 
-use crate::{WorkspaceSession, WorkspaceSessionBuilder, WorkspaceSessionError, WorkspaceSessionPhase};
+use crate::{
+    GotoDefinitionResponse, HoverContents, MarkedString, MarkupKind, OneOf, Position, Range,
+    SymbolInformation, SymbolKind, Uri, WorkspaceLocation, WorkspaceSession,
+    WorkspaceSessionBuilder, WorkspaceSessionError, WorkspaceSessionPhase, WorkspaceSymbol,
+    WorkspaceSymbolResponse,
+};
+use rmcp::handler::server::wrapper::Parameters;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::model::{ProtocolVersion, ServerCapabilities, ServerInfo};
 use rmcp::transport::stdio;
-use rmcp::{ServiceExt, ServerHandler};
-use rmcp_macros::{tool_handler, tool_router};
+use rmcp::{ErrorData, Json, ServiceExt, ServerHandler};
+use rmcp_macros::{tool, tool_handler, tool_router};
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
@@ -16,6 +22,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
+use tokio::task;
 
 pub use error::{ServerError, ServerErrorKind};
 pub use schema::*;
@@ -267,6 +274,28 @@ impl RustAnalyzerMcpServer {
         Arc::clone(&self.state)
     }
 
+    async fn with_workspace_session_blocking<T, F>(
+        &self,
+        root: PathBuf,
+        operation: &'static str,
+        f: F,
+    ) -> Result<T, ErrorData>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut WorkspaceSession) -> Result<T, WorkspaceSessionError> + Send + 'static,
+    {
+        let state = Arc::clone(&self.state);
+        task::spawn_blocking(move || state.with_workspace_session(root, operation, f))
+            .await
+            .map_err(|error| {
+                ErrorData::from(
+                    ServerError::internal(format!("workspace operation task failed: {error}"))
+                        .with_operation(operation),
+                )
+            })?
+            .map_err(ErrorData::from)
+    }
+
     /// Starts serving MCP traffic over stdio and waits until the transport closes.
     pub async fn serve_stdio(self) -> ServerResult<()> {
         let running_service = self
@@ -315,8 +344,421 @@ fn normalize_requested_workspace_root(root: &Path) -> Result<PathBuf, ServerErro
     std::fs::canonicalize(root).map_err(|_| ServerError::workspace_not_found(root))
 }
 
+fn to_lsp_position(position: TextPosition) -> Position {
+    Position::new(position.line, position.character)
+}
+
+fn normalize_hover(hover: crate::Hover) -> HoverSummary {
+    HoverSummary {
+        contents: normalize_hover_contents(hover.contents),
+        range: hover.range.map(normalize_range),
+    }
+}
+
+fn normalize_hover_contents(contents: HoverContents) -> HoverContent {
+    match contents {
+        HoverContents::Scalar(marked) => HoverContent::Markdown(normalize_marked_string(marked)),
+        HoverContents::Array(items) => HoverContent::Markdown(
+            items
+                .into_iter()
+                .map(normalize_marked_string)
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        ),
+        HoverContents::Markup(markup) => {
+            if markup.kind == MarkupKind::PlainText {
+                HoverContent::PlainText(markup.value)
+            } else {
+                HoverContent::Markdown(markup.value)
+            }
+        }
+    }
+}
+
+fn normalize_marked_string(value: MarkedString) -> String {
+    match value {
+        MarkedString::String(text) => text,
+        MarkedString::LanguageString(language) => {
+            format!("```{}\n{}\n```", language.language, language.value)
+        }
+    }
+}
+
+fn normalize_definitions(definitions: Option<GotoDefinitionResponse>) -> Vec<DocumentLocation> {
+    match definitions {
+        None => Vec::new(),
+        Some(GotoDefinitionResponse::Scalar(location)) => vec![normalize_location(location)],
+        Some(GotoDefinitionResponse::Array(locations)) => {
+            locations.into_iter().map(normalize_location).collect()
+        }
+        Some(GotoDefinitionResponse::Link(links)) => links
+            .into_iter()
+            .map(|link| DocumentLocation {
+                document_path: uri_to_path(&link.target_uri),
+                range: normalize_range(link.target_selection_range),
+            })
+            .collect(),
+    }
+}
+
+fn normalize_workspace_symbols(symbols: Option<WorkspaceSymbolResponse>) -> Vec<SymbolSummary> {
+    match symbols {
+        None => Vec::new(),
+        Some(WorkspaceSymbolResponse::Flat(symbols)) => symbols
+            .into_iter()
+            .map(normalize_flat_symbol)
+            .collect(),
+        Some(WorkspaceSymbolResponse::Nested(symbols)) => symbols
+            .into_iter()
+            .map(normalize_nested_symbol)
+            .collect(),
+    }
+}
+
+fn normalize_flat_symbol(symbol: SymbolInformation) -> SymbolSummary {
+    SymbolSummary {
+        name: symbol.name,
+        kind: symbol_kind_name(symbol.kind),
+        container_name: symbol.container_name,
+        location: normalize_location(symbol.location),
+    }
+}
+
+fn normalize_nested_symbol(symbol: WorkspaceSymbol) -> SymbolSummary {
+    let location = match symbol.location {
+        OneOf::Left(location) => normalize_location(location),
+        OneOf::Right(WorkspaceLocation { uri }) => DocumentLocation {
+            document_path: uri_to_path(&uri),
+            range: TextRange {
+                start: TextPosition {
+                    line: 0,
+                    character: 0,
+                },
+                end: TextPosition {
+                    line: 0,
+                    character: 0,
+                },
+            },
+        },
+    };
+
+    SymbolSummary {
+        name: symbol.name,
+        kind: symbol_kind_name(symbol.kind),
+        container_name: symbol.container_name,
+        location,
+    }
+}
+
+fn symbol_kind_name(kind: SymbolKind) -> String {
+    if kind == SymbolKind::FILE {
+        "file".to_owned()
+    } else if kind == SymbolKind::MODULE {
+        "module".to_owned()
+    } else if kind == SymbolKind::NAMESPACE {
+        "namespace".to_owned()
+    } else if kind == SymbolKind::PACKAGE {
+        "package".to_owned()
+    } else if kind == SymbolKind::CLASS {
+        "class".to_owned()
+    } else if kind == SymbolKind::METHOD {
+        "method".to_owned()
+    } else if kind == SymbolKind::PROPERTY {
+        "property".to_owned()
+    } else if kind == SymbolKind::FIELD {
+        "field".to_owned()
+    } else if kind == SymbolKind::CONSTRUCTOR {
+        "constructor".to_owned()
+    } else if kind == SymbolKind::ENUM {
+        "enum".to_owned()
+    } else if kind == SymbolKind::INTERFACE {
+        "interface".to_owned()
+    } else if kind == SymbolKind::FUNCTION {
+        "function".to_owned()
+    } else if kind == SymbolKind::VARIABLE {
+        "variable".to_owned()
+    } else if kind == SymbolKind::CONSTANT {
+        "constant".to_owned()
+    } else if kind == SymbolKind::STRING {
+        "string".to_owned()
+    } else if kind == SymbolKind::NUMBER {
+        "number".to_owned()
+    } else if kind == SymbolKind::BOOLEAN {
+        "boolean".to_owned()
+    } else if kind == SymbolKind::ARRAY {
+        "array".to_owned()
+    } else if kind == SymbolKind::OBJECT {
+        "object".to_owned()
+    } else if kind == SymbolKind::KEY {
+        "key".to_owned()
+    } else if kind == SymbolKind::NULL {
+        "null".to_owned()
+    } else if kind == SymbolKind::ENUM_MEMBER {
+        "enum_member".to_owned()
+    } else if kind == SymbolKind::STRUCT {
+        "struct".to_owned()
+    } else if kind == SymbolKind::EVENT {
+        "event".to_owned()
+    } else if kind == SymbolKind::OPERATOR {
+        "operator".to_owned()
+    } else if kind == SymbolKind::TYPE_PARAMETER {
+        "type_parameter".to_owned()
+    } else {
+        serde_json::to_value(kind)
+            .ok()
+            .and_then(|value| value.as_i64().map(|raw| format!("unknown_{raw}")))
+            .unwrap_or_else(|| "unknown".to_owned())
+    }
+}
+
+fn normalize_location(location: crate::Location) -> DocumentLocation {
+    DocumentLocation {
+        document_path: uri_to_path(&location.uri),
+        range: normalize_range(location.range),
+    }
+}
+
+fn normalize_range(range: Range) -> TextRange {
+    TextRange {
+        start: TextPosition {
+            line: range.start.line,
+            character: range.start.character,
+        },
+        end: TextPosition {
+            line: range.end.line,
+            character: range.end.character,
+        },
+    }
+}
+
+fn uri_to_path(uri: &Uri) -> PathBuf {
+    let raw = uri.as_str();
+    raw.strip_prefix("file://")
+        .map(percent_decode_path)
+        .unwrap_or_else(|| PathBuf::from(raw))
+}
+
+fn percent_decode_path(path: &str) -> PathBuf {
+    let bytes = path.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let high = from_hex_digit(bytes[index + 1]);
+            let low = from_hex_digit(bytes[index + 2]);
+            if let (Some(high), Some(low)) = (high, low) {
+                decoded.push((high << 4) | low);
+                index += 3;
+                continue;
+            }
+        }
+
+        decoded.push(bytes[index]);
+        index += 1;
+    }
+
+    PathBuf::from(String::from_utf8_lossy(&decoded).into_owned())
+}
+
+fn from_hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
 #[tool_router]
-impl RustAnalyzerMcpServer {}
+impl RustAnalyzerMcpServer {
+    #[tool(
+        name = "hover",
+        description = "Inspect hover information for a symbol in a workspace document.",
+        annotations(
+            title = "Hover",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn hover(
+        &self,
+        params: Parameters<DocumentPositionInput>,
+    ) -> Result<Json<ReadOnlyToolResult<Option<HoverSummary>>>, ErrorData> {
+        let params = params.0;
+        let workspace_root = params.workspace_root;
+        let document_path = params.document_path;
+        let position = to_lsp_position(params.position);
+        let result = self
+            .with_workspace_session_blocking(workspace_root, "hover", move |session| {
+                session.hover(&document_path, position)
+            })
+            .await?;
+
+        Ok(Json(ReadOnlyToolResult {
+            data: result.map(normalize_hover),
+            execution: Default::default(),
+        }))
+    }
+
+    #[tool(
+        name = "definitions",
+        description = "Resolve definition locations for a symbol in a workspace document.",
+        annotations(
+            title = "Definitions",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn definitions(
+        &self,
+        params: Parameters<DocumentPositionInput>,
+    ) -> Result<Json<ReadOnlyToolResult<Vec<DocumentLocation>>>, ErrorData> {
+        let params = params.0;
+        let workspace_root = params.workspace_root;
+        let document_path = params.document_path;
+        let position = to_lsp_position(params.position);
+        let result = self
+            .with_workspace_session_blocking(workspace_root, "definitions", move |session| {
+                session.goto_definition(&document_path, position)
+            })
+            .await?;
+
+        Ok(Json(ReadOnlyToolResult {
+            data: normalize_definitions(result),
+            execution: Default::default(),
+        }))
+    }
+
+    #[tool(
+        name = "references",
+        description = "List references for a symbol in a workspace document.",
+        annotations(
+            title = "References",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn references(
+        &self,
+        params: Parameters<DocumentPositionInput>,
+    ) -> Result<Json<ReadOnlyToolResult<Vec<DocumentLocation>>>, ErrorData> {
+        let params = params.0;
+        let workspace_root = params.workspace_root;
+        let document_path = params.document_path;
+        let position = to_lsp_position(params.position);
+        let result = self
+            .with_workspace_session_blocking(workspace_root, "references", move |session| {
+                session.references(&document_path, position, true)
+            })
+            .await?;
+
+        Ok(Json(ReadOnlyToolResult {
+            data: result
+                .unwrap_or_default()
+                .into_iter()
+                .map(normalize_location)
+                .collect(),
+            execution: Default::default(),
+        }))
+    }
+
+    #[tool(
+        name = "workspace_symbols",
+        description = "Search for symbols in a registered workspace root.",
+        annotations(
+            title = "Workspace Symbols",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn workspace_symbols(
+        &self,
+        params: Parameters<WorkspaceQueryInput>,
+    ) -> Result<Json<ReadOnlyToolResult<Vec<SymbolSummary>>>, ErrorData> {
+        let params = params.0;
+        let workspace_root = params.workspace_root;
+        let query = params.query;
+        let result = self
+            .with_workspace_session_blocking(workspace_root, "workspace_symbols", move |session| {
+                session.workspace_symbols(query)
+            })
+            .await?;
+
+        Ok(Json(ReadOnlyToolResult {
+            data: normalize_workspace_symbols(result),
+            execution: Default::default(),
+        }))
+    }
+
+    #[tool(
+        name = "analyzer_status",
+        description = "Read the rust-analyzer status string for a document or workspace.",
+        annotations(
+            title = "Analyzer Status",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn analyzer_status(
+        &self,
+        params: Parameters<AnalyzerStatusInput>,
+    ) -> Result<Json<ReadOnlyToolResult<AnalyzerStatusSummary>>, ErrorData> {
+        let params = params.0;
+        let workspace_root = params.workspace_root;
+        let document_path = params.document_path;
+        let status = self
+            .with_workspace_session_blocking(workspace_root, "analyzer_status", move |session| {
+                session.analyzer_status(document_path.as_ref())
+            })
+            .await?;
+
+        Ok(Json(ReadOnlyToolResult {
+            data: AnalyzerStatusSummary { status },
+            execution: Default::default(),
+        }))
+    }
+
+    #[tool(
+        name = "view_syntax_tree",
+        description = "Inspect the syntax tree for a document in a registered workspace root.",
+        annotations(
+            title = "Syntax Tree",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn view_syntax_tree(
+        &self,
+        params: Parameters<DocumentInput>,
+    ) -> Result<Json<ReadOnlyToolResult<SyntaxTreeSummary>>, ErrorData> {
+        let params = params.0;
+        let workspace_root = params.workspace_root;
+        let document_path = params.document_path;
+        let tree = self
+            .with_workspace_session_blocking(workspace_root, "view_syntax_tree", move |session| {
+                session.view_syntax_tree(&document_path)
+            })
+            .await?;
+
+        Ok(Json(ReadOnlyToolResult {
+            data: SyntaxTreeSummary { tree },
+            execution: Default::default(),
+        }))
+    }
+}
 
 #[tool_handler]
 impl ServerHandler for RustAnalyzerMcpServer {
@@ -331,5 +773,43 @@ impl ServerHandler for RustAnalyzerMcpServer {
             server_info: rmcp::model::Implementation::from_build_env(),
             ..Default::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{percent_decode_path, symbol_kind_name, uri_to_path};
+    use crate::{SymbolKind, Uri};
+    use std::path::PathBuf;
+    use std::str::FromStr;
+
+    #[test]
+    fn file_uris_are_percent_decoded_before_path_conversion() {
+        let uri = Uri::from_str("file:///tmp/workspace/src/with%20space.rs").expect("valid uri");
+        assert_eq!(
+            uri_to_path(&uri),
+            PathBuf::from("/tmp/workspace/src/with space.rs")
+        );
+    }
+
+    #[test]
+    fn invalid_percent_sequences_are_preserved() {
+        assert_eq!(
+            percent_decode_path("/tmp/workspace/src/percent%2G.rs"),
+            PathBuf::from("/tmp/workspace/src/percent%2G.rs")
+        );
+    }
+
+    #[test]
+    fn symbol_kind_names_are_stable_for_known_variants() {
+        assert_eq!(symbol_kind_name(SymbolKind::FUNCTION), "function");
+        assert_eq!(symbol_kind_name(SymbolKind::ENUM_MEMBER), "enum_member");
+        assert_eq!(symbol_kind_name(SymbolKind::TYPE_PARAMETER), "type_parameter");
+    }
+
+    #[test]
+    fn symbol_kind_names_fallback_for_unknown_variants() {
+        let unknown = serde_json::from_value(serde_json::json!(99)).expect("unknown symbol kind");
+        assert_eq!(symbol_kind_name(unknown), "unknown_99");
     }
 }
