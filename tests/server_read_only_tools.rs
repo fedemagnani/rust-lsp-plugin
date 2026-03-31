@@ -135,10 +135,24 @@ fn mcp_server_exposes_representative_read_only_analysis_tools() -> Result<(), Bo
             .starts_with("status:file://")
     );
 
-    let syntax_tree = call_tool(
+    let workspace_status = call_tool(
         &mut stdin,
         &mut stdout,
         8,
+        "analyzer_status",
+        json!({
+            "workspace_root": workspace_root
+        }),
+    )?;
+    assert_eq!(
+        workspace_status["structuredContent"]["data"]["status"],
+        json!("status:workspace")
+    );
+
+    let syntax_tree = call_tool(
+        &mut stdin,
+        &mut stdout,
+        9,
         "view_syntax_tree",
         json!({
             "workspace_root": workspace_root,

@@ -712,14 +712,14 @@ impl RustAnalyzerMcpServer {
     )]
     async fn analyzer_status(
         &self,
-        params: Parameters<DocumentInput>,
+        params: Parameters<AnalyzerStatusInput>,
     ) -> Result<Json<ReadOnlyToolResult<AnalyzerStatusSummary>>, ErrorData> {
         let params = params.0;
         let workspace_root = params.workspace_root;
         let document_path = params.document_path;
         let status = self
             .with_workspace_session_blocking(workspace_root, "analyzer_status", move |session| {
-                session.analyzer_status(Some(&document_path))
+                session.analyzer_status(document_path.as_ref())
             })
             .await?;
 

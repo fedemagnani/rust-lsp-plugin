@@ -64,6 +64,16 @@ pub struct DocumentInput {
     pub document_path: PathBuf,
 }
 
+/// Identifies an optional document inside a registered workspace.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AnalyzerStatusInput {
+    /// Absolute path to the workspace root managed by the server.
+    pub workspace_root: PathBuf,
+    /// Optional absolute path to the target document.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document_path: Option<PathBuf>,
+}
+
 /// Zero-based text position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TextPosition {
