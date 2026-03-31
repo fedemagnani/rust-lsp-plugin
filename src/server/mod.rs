@@ -208,7 +208,7 @@ impl ServerState {
             Some(session) => matches!(
                 session.phase(),
                 WorkspaceSessionPhase::Failed | WorkspaceSessionPhase::Shutdown
-            ),
+            ) || session.is_disconnected(),
         };
 
         if must_spawn {
