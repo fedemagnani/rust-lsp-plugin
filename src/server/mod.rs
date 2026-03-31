@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
+use tokio::task;
 
 pub use error::{ServerError, ServerErrorKind};
 pub use schema::*;
@@ -273,6 +274,28 @@ impl RustAnalyzerMcpServer {
         Arc::clone(&self.state)
     }
 
+    async fn with_workspace_session_blocking<T, F>(
+        &self,
+        root: PathBuf,
+        operation: &'static str,
+        f: F,
+    ) -> Result<T, ErrorData>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut WorkspaceSession) -> Result<T, WorkspaceSessionError> + Send + 'static,
+    {
+        let state = Arc::clone(&self.state);
+        task::spawn_blocking(move || state.with_workspace_session(root, operation, f))
+            .await
+            .map_err(|error| {
+                ErrorData::from(
+                    ServerError::internal(format!("workspace operation task failed: {error}"))
+                        .with_operation(operation),
+                )
+            })?
+            .map_err(ErrorData::from)
+    }
+
     /// Starts serving MCP traffic over stdio and waits until the transport closes.
     pub async fn serve_stdio(self) -> ServerResult<()> {
         let running_service = self
@@ -428,7 +451,64 @@ fn normalize_nested_symbol(symbol: WorkspaceSymbol) -> SymbolSummary {
 }
 
 fn symbol_kind_name(kind: SymbolKind) -> String {
-    format!("{kind:?}").to_lowercase()
+    if kind == SymbolKind::FILE {
+        "file".to_owned()
+    } else if kind == SymbolKind::MODULE {
+        "module".to_owned()
+    } else if kind == SymbolKind::NAMESPACE {
+        "namespace".to_owned()
+    } else if kind == SymbolKind::PACKAGE {
+        "package".to_owned()
+    } else if kind == SymbolKind::CLASS {
+        "class".to_owned()
+    } else if kind == SymbolKind::METHOD {
+        "method".to_owned()
+    } else if kind == SymbolKind::PROPERTY {
+        "property".to_owned()
+    } else if kind == SymbolKind::FIELD {
+        "field".to_owned()
+    } else if kind == SymbolKind::CONSTRUCTOR {
+        "constructor".to_owned()
+    } else if kind == SymbolKind::ENUM {
+        "enum".to_owned()
+    } else if kind == SymbolKind::INTERFACE {
+        "interface".to_owned()
+    } else if kind == SymbolKind::FUNCTION {
+        "function".to_owned()
+    } else if kind == SymbolKind::VARIABLE {
+        "variable".to_owned()
+    } else if kind == SymbolKind::CONSTANT {
+        "constant".to_owned()
+    } else if kind == SymbolKind::STRING {
+        "string".to_owned()
+    } else if kind == SymbolKind::NUMBER {
+        "number".to_owned()
+    } else if kind == SymbolKind::BOOLEAN {
+        "boolean".to_owned()
+    } else if kind == SymbolKind::ARRAY {
+        "array".to_owned()
+    } else if kind == SymbolKind::OBJECT {
+        "object".to_owned()
+    } else if kind == SymbolKind::KEY {
+        "key".to_owned()
+    } else if kind == SymbolKind::NULL {
+        "null".to_owned()
+    } else if kind == SymbolKind::ENUM_MEMBER {
+        "enum_member".to_owned()
+    } else if kind == SymbolKind::STRUCT {
+        "struct".to_owned()
+    } else if kind == SymbolKind::EVENT {
+        "event".to_owned()
+    } else if kind == SymbolKind::OPERATOR {
+        "operator".to_owned()
+    } else if kind == SymbolKind::TYPE_PARAMETER {
+        "type_parameter".to_owned()
+    } else {
+        serde_json::to_value(kind)
+            .ok()
+            .and_then(|value| value.as_i64().map(|raw| format!("unknown_{raw}")))
+            .unwrap_or_else(|| "unknown".to_owned())
+    }
 }
 
 fn normalize_location(location: crate::Location) -> DocumentLocation {
@@ -508,12 +588,14 @@ impl RustAnalyzerMcpServer {
         params: Parameters<DocumentPositionInput>,
     ) -> Result<Json<ReadOnlyToolResult<Option<HoverSummary>>>, ErrorData> {
         let params = params.0;
+        let workspace_root = params.workspace_root;
+        let document_path = params.document_path;
+        let position = to_lsp_position(params.position);
         let result = self
-            .state
-            .with_workspace_session(&params.workspace_root, "hover", |session| {
-                session.hover(&params.document_path, to_lsp_position(params.position))
+            .with_workspace_session_blocking(workspace_root, "hover", move |session| {
+                session.hover(&document_path, position)
             })
-            .map_err(ErrorData::from)?;
+            .await?;
 
         Ok(Json(ReadOnlyToolResult {
             data: result.map(normalize_hover),
@@ -537,12 +619,14 @@ impl RustAnalyzerMcpServer {
         params: Parameters<DocumentPositionInput>,
     ) -> Result<Json<ReadOnlyToolResult<Vec<DocumentLocation>>>, ErrorData> {
         let params = params.0;
+        let workspace_root = params.workspace_root;
+        let document_path = params.document_path;
+        let position = to_lsp_position(params.position);
         let result = self
-            .state
-            .with_workspace_session(&params.workspace_root, "definitions", |session| {
-                session.goto_definition(&params.document_path, to_lsp_position(params.position))
+            .with_workspace_session_blocking(workspace_root, "definitions", move |session| {
+                session.goto_definition(&document_path, position)
             })
-            .map_err(ErrorData::from)?;
+            .await?;
 
         Ok(Json(ReadOnlyToolResult {
             data: normalize_definitions(result),
@@ -566,12 +650,14 @@ impl RustAnalyzerMcpServer {
         params: Parameters<DocumentPositionInput>,
     ) -> Result<Json<ReadOnlyToolResult<Vec<DocumentLocation>>>, ErrorData> {
         let params = params.0;
+        let workspace_root = params.workspace_root;
+        let document_path = params.document_path;
+        let position = to_lsp_position(params.position);
         let result = self
-            .state
-            .with_workspace_session(&params.workspace_root, "references", |session| {
-                session.references(&params.document_path, to_lsp_position(params.position), true)
+            .with_workspace_session_blocking(workspace_root, "references", move |session| {
+                session.references(&document_path, position, true)
             })
-            .map_err(ErrorData::from)?;
+            .await?;
 
         Ok(Json(ReadOnlyToolResult {
             data: result
@@ -599,12 +685,13 @@ impl RustAnalyzerMcpServer {
         params: Parameters<WorkspaceQueryInput>,
     ) -> Result<Json<ReadOnlyToolResult<Vec<SymbolSummary>>>, ErrorData> {
         let params = params.0;
+        let workspace_root = params.workspace_root;
+        let query = params.query;
         let result = self
-            .state
-            .with_workspace_session(&params.workspace_root, "workspace_symbols", |session| {
-                session.workspace_symbols(params.query.clone())
+            .with_workspace_session_blocking(workspace_root, "workspace_symbols", move |session| {
+                session.workspace_symbols(query)
             })
-            .map_err(ErrorData::from)?;
+            .await?;
 
         Ok(Json(ReadOnlyToolResult {
             data: normalize_workspace_symbols(result),
@@ -628,12 +715,13 @@ impl RustAnalyzerMcpServer {
         params: Parameters<DocumentInput>,
     ) -> Result<Json<ReadOnlyToolResult<AnalyzerStatusSummary>>, ErrorData> {
         let params = params.0;
+        let workspace_root = params.workspace_root;
+        let document_path = params.document_path;
         let status = self
-            .state
-            .with_workspace_session(&params.workspace_root, "analyzer_status", |session| {
-                session.analyzer_status(Some(&params.document_path))
+            .with_workspace_session_blocking(workspace_root, "analyzer_status", move |session| {
+                session.analyzer_status(Some(&document_path))
             })
-            .map_err(ErrorData::from)?;
+            .await?;
 
         Ok(Json(ReadOnlyToolResult {
             data: AnalyzerStatusSummary { status },
@@ -657,12 +745,13 @@ impl RustAnalyzerMcpServer {
         params: Parameters<DocumentInput>,
     ) -> Result<Json<ReadOnlyToolResult<SyntaxTreeSummary>>, ErrorData> {
         let params = params.0;
+        let workspace_root = params.workspace_root;
+        let document_path = params.document_path;
         let tree = self
-            .state
-            .with_workspace_session(&params.workspace_root, "view_syntax_tree", |session| {
-                session.view_syntax_tree(&params.document_path)
+            .with_workspace_session_blocking(workspace_root, "view_syntax_tree", move |session| {
+                session.view_syntax_tree(&document_path)
             })
-            .map_err(ErrorData::from)?;
+            .await?;
 
         Ok(Json(ReadOnlyToolResult {
             data: SyntaxTreeSummary { tree },
@@ -689,8 +778,8 @@ impl ServerHandler for RustAnalyzerMcpServer {
 
 #[cfg(test)]
 mod tests {
-    use super::{percent_decode_path, uri_to_path};
-    use crate::Uri;
+    use super::{percent_decode_path, symbol_kind_name, uri_to_path};
+    use crate::{SymbolKind, Uri};
     use std::path::PathBuf;
     use std::str::FromStr;
 
@@ -709,5 +798,18 @@ mod tests {
             percent_decode_path("/tmp/workspace/src/percent%2G.rs"),
             PathBuf::from("/tmp/workspace/src/percent%2G.rs")
         );
+    }
+
+    #[test]
+    fn symbol_kind_names_are_stable_for_known_variants() {
+        assert_eq!(symbol_kind_name(SymbolKind::FUNCTION), "function");
+        assert_eq!(symbol_kind_name(SymbolKind::ENUM_MEMBER), "enum_member");
+        assert_eq!(symbol_kind_name(SymbolKind::TYPE_PARAMETER), "type_parameter");
+    }
+
+    #[test]
+    fn symbol_kind_names_fallback_for_unknown_variants() {
+        let unknown = serde_json::from_value(serde_json::json!(99)).expect("unknown symbol kind");
+        assert_eq!(symbol_kind_name(unknown), "unknown_99");
     }
 }
