@@ -189,7 +189,7 @@ impl From<SessionError> for ServerError {
                 "rust-analyzer request failed: {}",
                 error.message
             )),
-            SessionError::ProcessExitTimeout { timeout } => Self::timeout("shutdown", timeout),
+            SessionError::ProcessExitTimeout { timeout } => Self::new(ServerErrorKind::Timeout, format!("shutdown timed out after {:?}", timeout)).with_operation("shutdown").with_details(json!({ "timeout_ms": timeout.as_millis() })),
             SessionError::Spawn(error) | SessionError::Io(error) => Self::internal(error.to_string()),
             SessionError::MissingPipe(pipe) => {
                 Self::internal(format!("child process missing {pipe} pipe"))
