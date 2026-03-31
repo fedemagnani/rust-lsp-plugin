@@ -311,6 +311,11 @@ impl WorkspaceSession {
         self.phase
     }
 
+    /// Returns whether the underlying transport session has terminated.
+    pub fn is_disconnected(&self) -> bool {
+        self.session.is_terminated()
+    }
+
     /// Returns the workspace root for this session.
     pub fn workspace_root(&self) -> &Path {
         &self.workspace_root
