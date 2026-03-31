@@ -2,7 +2,7 @@
 
 use rmcp::model::ErrorCode;
 use rust_lsp_mcp::{
-    CancellationSummary, DocumentLocation, HoverContent, HoverSummary,
+    AnalyzerStatusInput, CancellationSummary, DocumentLocation, HoverContent, HoverSummary,
     MutatingToolResult, ReadOnlyToolResult, RenameSymbolInput, ServerError, ServerErrorKind,
     SessionError, TextEditSummary, TextPosition, TextRange, ToolExecutionSummary,
     ToolProgressPhase, ToolSemantics, WorkspaceChangeSummary, WorkspaceEditSummary,
@@ -43,6 +43,16 @@ fn representative_schema_inputs_remain_stable() {
     assert!(properties.get("document_path").is_some());
     assert!(properties.get("position").is_some());
     assert!(properties.get("new_name").is_some());
+
+    let analyzer_schema = schema_for!(AnalyzerStatusInput);
+    let analyzer_schema_json = serde_json::to_value(&analyzer_schema).expect("analyzer schema");
+    let analyzer_properties = &analyzer_schema_json["properties"];
+    assert!(analyzer_properties.get("workspace_root").is_some());
+    assert!(analyzer_properties.get("document_path").is_some());
+    assert_eq!(
+        analyzer_schema_json["required"],
+        json!(["workspace_root"])
+    );
 }
 
 #[test]
