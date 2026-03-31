@@ -1,5 +1,8 @@
 //! MCP server runtime scaffolding built on `rmcp`.
 
+mod error;
+mod schema;
+
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::model::{ProtocolVersion, ServerCapabilities, ServerInfo};
 use rmcp::transport::stdio;
@@ -9,6 +12,9 @@ use std::collections::BTreeSet;
 use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
+
+pub use error::{ServerError, ServerErrorKind};
+pub use schema::*;
 
 /// Fallible result used by the MCP server runtime.
 pub type ServerResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
