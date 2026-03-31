@@ -63,7 +63,34 @@ fn mcp_server_starts_serves_requests_and_exits_when_stdio_closes() -> Result<(),
 
     let tools_response = read_message(&mut stdout)?.expect("tools list response");
     assert_eq!(tools_response["id"], json!(2));
-    assert_eq!(tools_response["result"]["tools"], json!([]));
+    let tools = tools_response["result"]["tools"]
+        .as_array()
+        .expect("tools list should be an array");
+    assert!(
+        !tools.is_empty(),
+        "server should expose the registered read-only tools"
+    );
+
+    let tool_names = tools
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect::<Vec<_>>();
+    let mut tool_names = tool_names;
+    tool_names.sort_unstable();
+
+    let mut expected = vec![
+        "definitions",
+        "analyzer_status",
+        "view_syntax_tree",
+        "references",
+        "hover",
+        "workspace_symbols",
+    ];
+    expected.sort_unstable();
+    assert_eq!(
+        tool_names,
+        expected
+    );
     assert!(child.try_wait()?.is_none(), "server exited before stdio closed");
 
     drop(stdin);

@@ -158,6 +158,20 @@ pub struct SymbolSummary {
     pub location: DocumentLocation,
 }
 
+/// Representative analyzer-status output.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AnalyzerStatusSummary {
+    /// Human-readable analyzer status string.
+    pub status: String,
+}
+
+/// Representative syntax-tree inspection output.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SyntaxTreeSummary {
+    /// Rendered syntax tree for the requested document.
+    pub tree: String,
+}
+
 /// Most recent progress phase for a tool call.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
