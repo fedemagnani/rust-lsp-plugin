@@ -85,6 +85,12 @@ fn mcp_server_starts_serves_requests_and_exits_when_stdio_closes() -> Result<(),
         "references",
         "hover",
         "workspace_symbols",
+        "open_document",
+        "change_document",
+        "close_document",
+        "rename_symbol",
+        "reload_workspace",
+        "rebuild_proc_macros",
     ];
     expected.sort_unstable();
     assert_eq!(

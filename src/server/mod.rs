@@ -4,10 +4,11 @@ mod error;
 mod schema;
 
 use crate::{
+    CreateFile, DeleteFile, DocumentChangeOperation, DocumentChanges,
     GotoDefinitionResponse, HoverContents, MarkedString, MarkupKind, OneOf, Position, Range,
-    SymbolInformation, SymbolKind, Uri, WorkspaceLocation, WorkspaceSession,
-    WorkspaceSessionBuilder, WorkspaceSessionError, WorkspaceSessionPhase, WorkspaceSymbol,
-    WorkspaceSymbolResponse,
+    RenameFile, ResourceOp, SymbolInformation, SymbolKind, TextEdit, Uri, WorkspaceEdit,
+    WorkspaceLocation, WorkspaceSession, WorkspaceSessionBuilder, WorkspaceSessionError,
+    WorkspaceSessionPhase, WorkspaceSymbol, WorkspaceSymbolResponse,
 };
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -570,6 +571,89 @@ fn from_hex_digit(byte: u8) -> Option<u8> {
     }
 }
 
+fn normalize_workspace_edit(edit: WorkspaceEdit) -> WorkspaceEditSummary {
+    let mut changes = Vec::new();
+
+    if let Some(document_changes) = edit.document_changes {
+        match document_changes {
+            DocumentChanges::Edits(edits) => {
+                for edit in edits {
+                    changes.push(WorkspaceChangeSummary::TextEdits {
+                        document_path: uri_to_path(&edit.text_document.uri),
+                        edits: edit
+                            .edits
+                            .into_iter()
+                            .map(|e| match e {
+                                OneOf::Left(text_edit) => normalize_text_edit(text_edit),
+                                OneOf::Right(annotated) => normalize_text_edit(annotated.text_edit),
+                            })
+                            .collect(),
+                    });
+                }
+            }
+            DocumentChanges::Operations(ops) => {
+                for op in ops {
+                    match op {
+                        DocumentChangeOperation::Edit(edit) => {
+                            changes.push(WorkspaceChangeSummary::TextEdits {
+                                document_path: uri_to_path(&edit.text_document.uri),
+                                edits: edit
+                                    .edits
+                                    .into_iter()
+                                    .map(|e| match e {
+                                        OneOf::Left(text_edit) => {
+                                            normalize_text_edit(text_edit)
+                                        }
+                                        OneOf::Right(annotated) => {
+                                            normalize_text_edit(annotated.text_edit)
+                                        }
+                                    })
+                                    .collect(),
+                            });
+                        }
+                        DocumentChangeOperation::Op(op) => match op {
+                            ResourceOp::Create(CreateFile { uri, .. }) => {
+                                changes.push(WorkspaceChangeSummary::CreateFile {
+                                    path: uri_to_path(&uri),
+                                });
+                            }
+                            ResourceOp::Rename(RenameFile {
+                                old_uri, new_uri, ..
+                            }) => {
+                                changes.push(WorkspaceChangeSummary::RenameFile {
+                                    old_path: uri_to_path(&old_uri),
+                                    new_path: uri_to_path(&new_uri),
+                                });
+                            }
+                            ResourceOp::Delete(DeleteFile { uri, .. }) => {
+                                changes.push(WorkspaceChangeSummary::DeleteFile {
+                                    path: uri_to_path(&uri),
+                                });
+                            }
+                        },
+                    }
+                }
+            }
+        }
+    } else if let Some(text_changes) = edit.changes {
+        for (uri, edits) in text_changes {
+            changes.push(WorkspaceChangeSummary::TextEdits {
+                document_path: uri_to_path(&uri),
+                edits: edits.into_iter().map(normalize_text_edit).collect(),
+            });
+        }
+    }
+
+    WorkspaceEditSummary { changes }
+}
+
+fn normalize_text_edit(edit: TextEdit) -> TextEditSummary {
+    TextEditSummary {
+        range: normalize_range(edit.range),
+        new_text: edit.new_text,
+    }
+}
+
 #[tool_router]
 impl RustAnalyzerMcpServer {
     #[tool(
@@ -756,6 +840,230 @@ impl RustAnalyzerMcpServer {
         Ok(Json(ReadOnlyToolResult {
             data: SyntaxTreeSummary { tree },
             execution: Default::default(),
+        }))
+    }
+
+    #[tool(
+        name = "open_document",
+        description = "Open a document and synchronize its contents with the workspace rust-analyzer session. The document must be opened before position-based tools can operate on it.",
+        annotations(
+            title = "Open Document",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn open_document(
+        &self,
+        params: Parameters<OpenDocumentInput>,
+    ) -> Result<Json<MutatingToolResult<OpenDocumentSummary>>, ErrorData> {
+        let params = params.0;
+        let workspace_root = params.workspace_root;
+        let document_path = params.document_path;
+        let language_id = params.language_id.unwrap_or_else(|| "rust".to_owned());
+        let text = params.text;
+        let result = self
+            .with_workspace_session_blocking(
+                workspace_root,
+                "open_document",
+                move |session| {
+                    let tracked = session.open_document(&document_path, language_id, 0, text)?;
+                    Ok(OpenDocumentSummary {
+                        document_path: tracked.path.clone(),
+                        version: tracked.version(),
+                    })
+                },
+            )
+            .await?;
+
+        Ok(Json(MutatingToolResult {
+            data: result,
+            execution: Default::default(),
+            workspace_edit: None,
+        }))
+    }
+
+    #[tool(
+        name = "change_document",
+        description = "Replace the full contents of an already-open document. The version must be strictly greater than the previous version.",
+        annotations(
+            title = "Change Document",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn change_document(
+        &self,
+        params: Parameters<ChangeDocumentInput>,
+    ) -> Result<Json<MutatingToolResult<ChangeDocumentSummary>>, ErrorData> {
+        let params = params.0;
+        let workspace_root = params.workspace_root;
+        let document_path = params.document_path;
+        let version = params.version;
+        let text = params.text;
+        let result = self
+            .with_workspace_session_blocking(
+                workspace_root,
+                "change_document",
+                move |session| {
+                    let tracked = session.change_document(&document_path, version, text)?;
+                    Ok(ChangeDocumentSummary {
+                        document_path: tracked.path.clone(),
+                        version: tracked.version(),
+                    })
+                },
+            )
+            .await?;
+
+        Ok(Json(MutatingToolResult {
+            data: result,
+            execution: Default::default(),
+            workspace_edit: None,
+        }))
+    }
+
+    #[tool(
+        name = "close_document",
+        description = "Stop synchronizing an open document with the workspace rust-analyzer session and release its tracked state.",
+        annotations(
+            title = "Close Document",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn close_document(
+        &self,
+        params: Parameters<DocumentInput>,
+    ) -> Result<Json<MutatingToolResult<CloseDocumentSummary>>, ErrorData> {
+        let params = params.0;
+        let workspace_root = params.workspace_root;
+        let document_path = params.document_path;
+        let result = self
+            .with_workspace_session_blocking(
+                workspace_root,
+                "close_document",
+                move |session| {
+                    let tracked = session.close_document(&document_path)?;
+                    Ok(CloseDocumentSummary {
+                        document_path: tracked.path,
+                    })
+                },
+            )
+            .await?;
+
+        Ok(Json(MutatingToolResult {
+            data: result,
+            execution: Default::default(),
+            workspace_edit: None,
+        }))
+    }
+
+    #[tool(
+        name = "rename_symbol",
+        description = "Rename a symbol across the workspace and return the resulting workspace edits. The edits are reported but not automatically applied to disk.",
+        annotations(
+            title = "Rename Symbol",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn rename_symbol(
+        &self,
+        params: Parameters<RenameSymbolInput>,
+    ) -> Result<Json<MutatingToolResult<RenameSummary>>, ErrorData> {
+        let params = params.0;
+        let workspace_root = params.workspace_root;
+        let document_path = params.document_path;
+        let position = to_lsp_position(params.position);
+        let new_name = params.new_name;
+        let (summary, edit) = self
+            .with_workspace_session_blocking(
+                workspace_root,
+                "rename_symbol",
+                move |session| {
+                    let workspace_edit =
+                        session.rename(&document_path, position, &new_name)?;
+                    Ok((
+                        RenameSummary {
+                            new_name: new_name.clone(),
+                        },
+                        workspace_edit,
+                    ))
+                },
+            )
+            .await?;
+
+        Ok(Json(MutatingToolResult {
+            data: summary,
+            execution: Default::default(),
+            workspace_edit: edit.map(normalize_workspace_edit),
+        }))
+    }
+
+    #[tool(
+        name = "reload_workspace",
+        description = "Ask rust-analyzer to reload the workspace configuration. Use this after Cargo.toml or project-level configuration changes.",
+        annotations(
+            title = "Reload Workspace",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn reload_workspace(
+        &self,
+        params: Parameters<WorkspaceRootInput>,
+    ) -> Result<Json<MutatingToolResult<()>>, ErrorData> {
+        let workspace_root = params.0.workspace_root;
+        self.with_workspace_session_blocking(
+            workspace_root,
+            "reload_workspace",
+            move |session| session.reload_workspace(),
+        )
+        .await?;
+
+        Ok(Json(MutatingToolResult {
+            data: (),
+            execution: Default::default(),
+            workspace_edit: None,
+        }))
+    }
+
+    #[tool(
+        name = "rebuild_proc_macros",
+        description = "Trigger a rebuild of procedural macros for the workspace. Use this after changing proc-macro crate source.",
+        annotations(
+            title = "Rebuild Proc Macros",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn rebuild_proc_macros(
+        &self,
+        params: Parameters<WorkspaceRootInput>,
+    ) -> Result<Json<MutatingToolResult<()>>, ErrorData> {
+        let workspace_root = params.0.workspace_root;
+        self.with_workspace_session_blocking(
+            workspace_root,
+            "rebuild_proc_macros",
+            move |session| session.rebuild_proc_macros(),
+        )
+        .await?;
+
+        Ok(Json(MutatingToolResult {
+            data: (),
+            execution: Default::default(),
+            workspace_edit: None,
         }))
     }
 }

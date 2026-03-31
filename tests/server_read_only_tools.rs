@@ -44,7 +44,22 @@ fn mcp_server_exposes_representative_read_only_analysis_tools() -> Result<(), Bo
     assert!(tools.iter().any(|tool| tool["name"] == "workspace_symbols"));
     assert!(tools.iter().any(|tool| tool["name"] == "analyzer_status"));
     assert!(tools.iter().any(|tool| tool["name"] == "view_syntax_tree"));
-    assert!(tools.iter().all(|tool| {
+    let read_only_names: Vec<&str> = vec![
+        "hover",
+        "definitions",
+        "references",
+        "workspace_symbols",
+        "analyzer_status",
+        "view_syntax_tree",
+    ];
+    let read_only_tools: Vec<_> = tools
+        .iter()
+        .filter(|tool| {
+            read_only_names.contains(&tool["name"].as_str().unwrap_or(""))
+        })
+        .collect();
+    assert_eq!(read_only_tools.len(), read_only_names.len());
+    assert!(read_only_tools.iter().all(|tool| {
         tool["annotations"]["readOnlyHint"] == json!(true)
             && tool["annotations"]["destructiveHint"] == json!(false)
     }));
