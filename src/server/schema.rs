@@ -77,12 +77,44 @@ pub struct AnalyzerStatusInput {
 /// Zero-based text position.
 ///
 /// Accepts either `{"line": 21, "character": 5}` or `"21:5"`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct TextPosition {
     /// Zero-based line number.
     pub line: u32,
     /// Zero-based UTF-8 character offset on the line.
     pub character: u32,
+}
+
+impl JsonSchema for TextPosition {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "TextPosition".into()
+    }
+
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        concat!(module_path!(), "::TextPosition").into()
+    }
+
+    fn json_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "oneOf": [
+                {
+                    "type": "object",
+                    "description": "Zero-based text position as an object.",
+                    "properties": {
+                        "line": { "type": "integer", "minimum": 0, "description": "Zero-based line number." },
+                        "character": { "type": "integer", "minimum": 0, "description": "Zero-based UTF-8 character offset on the line." }
+                    },
+                    "required": ["line", "character"],
+                    "additionalProperties": false
+                },
+                {
+                    "type": "string",
+                    "description": "Zero-based text position as \"line:character\".",
+                    "pattern": "^\\d+:\\d+$"
+                }
+            ]
+        })
+    }
 }
 
 impl<'de> serde::Deserialize<'de> for TextPosition {

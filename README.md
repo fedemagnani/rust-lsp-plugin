@@ -21,7 +21,7 @@ cargo install --git https://github.com/fedemagnani/rust-lsp-mcp
 ### 2. Install the agent skill
 
 ```bash
-npx skills add https://github.com/fedemagnani/rust-lsp-mcp --skill rust-lsp-mcp -y
+npx skills add https://github.com/fedemagnani/rust-lsp-mcp
 ```
 
 ### 3. Add the MCP server
