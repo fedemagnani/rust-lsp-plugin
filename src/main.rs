@@ -1,9 +1,9 @@
 #![allow(missing_docs)]
 
-use rust_lsp_mcp::{RustAnalyzerMcpServer, WorkspaceSessionConfig};
+use rust_lsp_mcp::mcp_server::{RustAnalyzerMcpServer, ServerResult, WorkspaceSessionConfig};
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> rust_lsp_mcp::ServerResult<()> {
+async fn main() -> ServerResult<()> {
     let server = RustAnalyzerMcpServer::new();
 
     let program = resolve_rust_analyzer();

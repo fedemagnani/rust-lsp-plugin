@@ -1,4 +1,5 @@
-use rust_lsp_mcp::{FileChangeType, FileEvent, WorkspaceSessionBuilder, WorkspaceSessionError};
+use lsp_types::{FileChangeType, FileEvent};
+use rust_lsp_mcp::lsp_client::{WorkspaceSessionBuilder, WorkspaceSessionError};
 use serde_json::{Value, json};
 use std::error::Error;
 use std::fs;
@@ -225,7 +226,7 @@ fn resolves_symlinked_document_paths_to_the_same_entry() -> Result<(), Box<dyn E
 
 fn spawn_workspace_session(
     workspace_root: &Path,
-) -> Result<rust_lsp_mcp::WorkspaceSession, Box<dyn Error>> {
+) -> Result<rust_lsp_mcp::lsp_client::WorkspaceSession, Box<dyn Error>> {
     let program = std::env::var("CARGO_BIN_EXE_mock_rust_analyzer")?;
     Ok(WorkspaceSessionBuilder::new(program, workspace_root).spawn()?)
 }

@@ -3,11 +3,13 @@
 mod error;
 mod schema;
 
-use crate::{
+use crate::lsp_client::{
+    WorkspaceSession, WorkspaceSessionBuilder, WorkspaceSessionError, WorkspaceSessionPhase,
+};
+use lsp_types::{
     CreateFile, DeleteFile, DocumentChangeOperation, DocumentChanges, GotoDefinitionResponse,
     HoverContents, MarkedString, MarkupKind, OneOf, Position, Range, RenameFile, ResourceOp,
     SymbolInformation, SymbolKind, TextEdit, Uri, WorkspaceEdit, WorkspaceLocation,
-    WorkspaceSession, WorkspaceSessionBuilder, WorkspaceSessionError, WorkspaceSessionPhase,
     WorkspaceSymbol, WorkspaceSymbolResponse,
 };
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -292,7 +294,7 @@ fn to_lsp_position(position: TextPosition) -> Position {
     Position::new(position.line, position.character)
 }
 
-fn normalize_hover(hover: crate::Hover) -> HoverSummary {
+fn normalize_hover(hover: lsp_types::Hover) -> HoverSummary {
     HoverSummary {
         contents: normalize_hover_contents(hover.contents),
         range: hover.range.map(normalize_range),
@@ -453,7 +455,7 @@ fn symbol_kind_name(kind: SymbolKind) -> String {
     }
 }
 
-fn normalize_location(location: crate::Location) -> DocumentLocation {
+fn normalize_location(location: lsp_types::Location) -> DocumentLocation {
     DocumentLocation {
         document_path: uri_to_path(&location.uri),
         range: normalize_range(location.range),
@@ -676,7 +678,7 @@ impl RustAnalyzerMcpServer {
         let workspace_root = params.workspace_root;
         let document_path = params.document_path;
         let position = to_lsp_position(params.position);
-        let result = self
+        let result: Option<Vec<lsp_types::Location>> = self
             .with_workspace_session_blocking(workspace_root, "references", move |session| {
                 session.references(&document_path, position, true)
             })
@@ -1055,7 +1057,7 @@ impl ServerHandler for RustAnalyzerMcpServer {
 #[cfg(test)]
 mod tests {
     use super::{percent_decode_path, symbol_kind_name, uri_to_path};
-    use crate::{SymbolKind, Uri};
+    use lsp_types::{SymbolKind, Uri};
     use std::path::PathBuf;
     use std::str::FromStr;
 

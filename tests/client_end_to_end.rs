@@ -1,6 +1,9 @@
-use rust_lsp_mcp::{
-    ExpandedMacro, HoverContents, MarkupKind, Position, RunnableArgs, RunnableKind,
-    WorkspaceLoadingState, WorkspaceSessionBuilder, WorkspaceSessionPhase,
+use lsp_types::{
+    GotoDefinitionResponse, HoverContents, MarkupKind, Position, WorkspaceSymbolResponse,
+};
+use rust_lsp_mcp::lsp_client::{
+    ExpandedMacro, RunnableArgs, RunnableKind, WorkspaceLoadingState, WorkspaceSessionBuilder,
+    WorkspaceSessionPhase,
 };
 use serde_json::json;
 use std::error::Error;
@@ -94,8 +97,8 @@ fn workspace_session_supports_an_end_to_end_client_flow() -> Result<(), Box<dyn 
         .goto_definition(&file_path, call_site)?
         .expect("definition result");
     let definition_uri = match definitions {
-        rust_lsp_mcp::GotoDefinitionResponse::Scalar(location) => location.uri,
-        rust_lsp_mcp::GotoDefinitionResponse::Array(locations) => {
+        GotoDefinitionResponse::Scalar(location) => location.uri,
+        GotoDefinitionResponse::Array(locations) => {
             assert_eq!(locations.len(), 1);
             locations[0].uri.clone()
         }
@@ -112,11 +115,11 @@ fn workspace_session_supports_an_end_to_end_client_flow() -> Result<(), Box<dyn 
         .workspace_symbols("answer")?
         .expect("workspace symbols");
     match symbols {
-        rust_lsp_mcp::WorkspaceSymbolResponse::Nested(symbols) => {
+        WorkspaceSymbolResponse::Nested(symbols) => {
             assert_eq!(symbols.len(), 1);
             assert_eq!(symbols[0].name, "answer");
         }
-        rust_lsp_mcp::WorkspaceSymbolResponse::Flat(symbols) => {
+        WorkspaceSymbolResponse::Flat(symbols) => {
             assert_eq!(symbols.len(), 1);
             assert_eq!(symbols[0].name, "answer");
         }
@@ -165,7 +168,7 @@ fn workspace_session_supports_an_end_to_end_client_flow() -> Result<(), Box<dyn 
 
 fn spawn_workspace_session(
     workspace_root: &Path,
-) -> Result<rust_lsp_mcp::WorkspaceSession, Box<dyn Error>> {
+) -> Result<rust_lsp_mcp::lsp_client::WorkspaceSession, Box<dyn Error>> {
     let program = std::env::var("CARGO_BIN_EXE_mock_rust_analyzer")?;
     Ok(WorkspaceSessionBuilder::new(program, workspace_root).spawn()?)
 }
