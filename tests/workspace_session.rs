@@ -1,8 +1,9 @@
 #![allow(missing_docs)]
 
-use rust_lsp_mcp::{
-    HoverProviderCapability, PositionEncodingKind, SessionEvent, WorkspaceLoadingState,
-    WorkspaceSessionBuilder, WorkspaceSessionError, WorkspaceSessionPhase,
+use lsp_types::{HoverProviderCapability, PositionEncodingKind};
+use rust_lsp_mcp::lsp_client::{
+    SessionEvent, WorkspaceLoadingState, WorkspaceSessionBuilder, WorkspaceSessionError,
+    WorkspaceSessionPhase,
 };
 use serde_json::json;
 use std::path::PathBuf;
@@ -12,7 +13,7 @@ fn workspace_root() -> PathBuf {
     std::env::current_dir().expect("workspace root")
 }
 
-fn spawn_workspace_session() -> rust_lsp_mcp::WorkspaceSession {
+fn spawn_workspace_session() -> rust_lsp_mcp::lsp_client::WorkspaceSession {
     let binary = env!("CARGO_BIN_EXE_mock_rust_analyzer");
     WorkspaceSessionBuilder::new(binary, workspace_root())
         .ready_timeout(Duration::from_millis(200))
@@ -20,7 +21,7 @@ fn spawn_workspace_session() -> rust_lsp_mcp::WorkspaceSession {
         .expect("spawn workspace session")
 }
 
-fn spawn_failing_initialized_workspace_session() -> rust_lsp_mcp::WorkspaceSession {
+fn spawn_failing_initialized_workspace_session() -> rust_lsp_mcp::lsp_client::WorkspaceSession {
     let binary = env!("CARGO_BIN_EXE_mock_rust_analyzer");
     WorkspaceSessionBuilder::new(binary, workspace_root())
         .env("MOCK_INITIALIZED_FAILURE", "1")
@@ -29,7 +30,7 @@ fn spawn_failing_initialized_workspace_session() -> rust_lsp_mcp::WorkspaceSessi
         .expect("spawn workspace session")
 }
 
-fn spawn_workspace_session_with_extra_startup_progress() -> rust_lsp_mcp::WorkspaceSession {
+fn spawn_workspace_session_with_extra_startup_progress() -> rust_lsp_mcp::lsp_client::WorkspaceSession {
     let binary = env!("CARGO_BIN_EXE_mock_rust_analyzer");
     WorkspaceSessionBuilder::new(binary, workspace_root())
         .env("MOCK_EXTRA_STARTUP_PROGRESS", "1")
@@ -175,7 +176,7 @@ fn workspace_session_enters_failed_phase_when_initialize_fails() {
         .expect_err("initialize should fail when initialized handling disconnects");
     assert!(matches!(
         error,
-        WorkspaceSessionError::Session(rust_lsp_mcp::SessionError::Disconnected)
+        WorkspaceSessionError::Session(rust_lsp_mcp::lsp_client::SessionError::Disconnected)
     ));
     assert_eq!(session.phase(), WorkspaceSessionPhase::Failed);
 

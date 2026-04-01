@@ -1,7 +1,7 @@
-//! Runtime primitives for speaking JSON-RPC 2.0 with a stdio-backed LSP server.
+//! MCP server backed by rust-analyzer, exposing LSP-powered code intelligence tools.
+//!
+//! - [`lsp_client`] — JSON-RPC transport and workspace session management for stdio-backed LSP servers.
+//! - [`mcp_server`] — MCP server runtime that wraps the LSP client and exposes tools to callers.
 
 pub mod lsp_client;
-pub mod server;
-
-pub use lsp_client::*;
-pub use server::*;
+pub mod mcp_server;

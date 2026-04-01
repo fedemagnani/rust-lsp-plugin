@@ -1,6 +1,6 @@
 //! rust-analyzer-specific request surface kept separate from standard LSP types.
 
-use super::{
+use lsp_types::{
     GotoDefinitionResponse, LocationLink, Position, TextDocumentIdentifier,
     TextDocumentPositionParams, Uri, WorkspaceSymbolResponse,
 };
@@ -13,7 +13,7 @@ macro_rules! ra_request {
         #[derive(Debug)]
         pub enum $name {}
 
-        impl super::request::Request for $name {
+        impl lsp_types::request::Request for $name {
             type Params = $params;
             type Result = $result;
 
@@ -187,9 +187,9 @@ pub struct TestInfo {
 #[serde(rename_all = "camelCase")]
 pub struct RustAnalyzerWorkspaceSymbolParams {
     #[serde(flatten)]
-    pub partial_result_params: super::PartialResultParams,
+    pub partial_result_params: lsp_types::PartialResultParams,
     #[serde(flatten)]
-    pub work_done_progress_params: super::WorkDoneProgressParams,
+    pub work_done_progress_params: lsp_types::WorkDoneProgressParams,
     pub query: String,
     pub search_scope: Option<WorkspaceSymbolSearchScope>,
     pub search_kind: Option<WorkspaceSymbolSearchKind>,
