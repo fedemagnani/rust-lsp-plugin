@@ -1,3 +1,13 @@
+---
+name: rust-lsp-mcp
+description: >-
+  Rust Analyzer Agent Skill. Use when navigating or analyzing a Rust codebase semantically:
+  finding symbol definitions across crate boundaries, locating all references to a function or
+  type, inspecting inferred types or trait implementations, searching for symbols by name across
+  a workspace, renaming symbols safely, or managing rust-analyzer workspace state. Prefer this
+  skill over grep or file reads whenever the task requires Rust-aware semantic understanding.
+---
+
 # Rust Analyzer Agent Skill
 
 This skill teaches an agent when and how to use the rust-analyzer MCP tools for Rust codebase
