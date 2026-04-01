@@ -1069,6 +1069,7 @@ impl WorkspaceSession {
     fn capture_event(&mut self, event: SessionEvent) {
         if let SessionEvent::Progress { token, value } = &event {
             self.update_loading_state(token, value);
+            return;
         }
         if is_progress_notification(&event) {
             return;
