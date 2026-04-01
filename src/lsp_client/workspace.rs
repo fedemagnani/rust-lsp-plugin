@@ -283,6 +283,7 @@ impl WorkspaceSessionBuilder {
             ready_timeout: self.ready_timeout,
             ready_state: None,
             loading_state: WorkspaceLoadingState::NotStarted,
+            registered_progress_tokens: HashSet::new(),
             active_progress: HashSet::new(),
             open_documents: HashMap::new(),
         })
@@ -305,7 +306,10 @@ pub struct WorkspaceSession {
     ready_timeout: Duration,
     ready_state: Option<WorkspaceReadyState>,
     loading_state: WorkspaceLoadingState,
-    /// Tokens with an active `begin` that have not yet received `end`.
+    /// Tokens registered via `window/workDoneProgress/create` during a loading window.
+    /// Only these tokens are tracked for loading state transitions.
+    registered_progress_tokens: HashSet<String>,
+    /// Subset of `registered_progress_tokens` with an active `begin` not yet `end`-ed.
     active_progress: HashSet<String>,
     open_documents: HashMap<PathBuf, TrackedDocument>,
 }
@@ -392,6 +396,9 @@ impl WorkspaceSession {
                     Some(SessionEvent::ServerRequest(request))
                         if request.method == "window/workDoneProgress/create" =>
                     {
+                        if let Some(token_key) = progress_token_key(&request.params) {
+                            self.registered_progress_tokens.insert(token_key);
+                        }
                         self.session.respond(request.id, Value::Null)?;
                     }
                     Some(SessionEvent::Progress { token, value }) => {
@@ -620,6 +627,7 @@ impl WorkspaceSession {
 
     /// Resets loading state so that new progress events are tracked from scratch.
     fn reset_loading_state(&mut self) {
+        self.registered_progress_tokens.clear();
         self.active_progress.clear();
         self.loading_state = WorkspaceLoadingState::NotStarted;
     }
@@ -961,6 +969,9 @@ impl WorkspaceSession {
             SessionEvent::ServerRequest(request)
                 if request.method == "window/workDoneProgress/create" =>
             {
+                if let Some(token_key) = progress_token_key(&request.params) {
+                    self.registered_progress_tokens.insert(token_key);
+                }
                 self.session.respond(request.id, Value::Null).is_ok()
             }
             other => {
@@ -1079,6 +1090,10 @@ impl WorkspaceSession {
             Value::Number(n) => n.to_string(),
             _ => return,
         };
+
+        if !self.registered_progress_tokens.contains(&token_key) {
+            return;
+        }
 
         match progress_value.get("kind").and_then(Value::as_str) {
             Some("begin") => {
@@ -1423,6 +1438,15 @@ fn percent_encode(segment: &OsStr) -> String {
         }
     }
     encoded
+}
+
+/// Extracts the progress token key from `window/workDoneProgress/create` request params.
+fn progress_token_key(params: &Value) -> Option<String> {
+    match params.get("token") {
+        Some(Value::String(s)) => Some(s.clone()),
+        Some(Value::Number(n)) => Some(n.to_string()),
+        _ => None,
+    }
 }
 
 fn is_progress_notification(event: &SessionEvent) -> bool {
