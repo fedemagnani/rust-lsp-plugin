@@ -16,14 +16,13 @@ use lsp_types::{
 };
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf, Prefix};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Duration;
 
 const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(1);
-const WORKSPACE_PROGRESS_TOKEN: &str = "rustAnalyzer/workspace";
 
 /// High-level session phase for the LSP initialization lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -281,6 +280,7 @@ impl WorkspaceSessionBuilder {
             ready_timeout: self.ready_timeout,
             ready_state: None,
             loading_state: WorkspaceLoadingState::NotStarted,
+            active_progress: HashSet::new(),
             open_documents: HashMap::new(),
         })
     }
@@ -302,6 +302,8 @@ pub struct WorkspaceSession {
     ready_timeout: Duration,
     ready_state: Option<WorkspaceReadyState>,
     loading_state: WorkspaceLoadingState,
+    /// Tokens with an active `begin` that have not yet received `end`.
+    active_progress: HashSet<String>,
     open_documents: HashMap<PathBuf, TrackedDocument>,
 }
 
@@ -383,6 +385,11 @@ impl WorkspaceSession {
                             Some(&request.params),
                         );
                         self.session.respond(request.id, response)?;
+                    }
+                    Some(SessionEvent::ServerRequest(request))
+                        if request.method == "window/workDoneProgress/create" =>
+                    {
+                        self.session.respond(request.id, Value::Null)?;
                     }
                     Some(SessionEvent::Progress { token, value }) => {
                         self.update_loading_state(&token, &value);
@@ -882,6 +889,16 @@ impl WorkspaceSession {
             return true;
         }
 
+        // Process any events buffered during initialize() first — this may include
+        // window/workDoneProgress/create requests that need a response before
+        // rust-analyzer will send progress notifications.
+        if !self.drain_buffered_events() {
+            return false;
+        }
+        if self.loading_state == WorkspaceLoadingState::Ready {
+            return true;
+        }
+
         let deadline = std::time::Instant::now() + timeout;
         loop {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
@@ -890,19 +907,10 @@ impl WorkspaceSession {
             }
 
             match self.recv_event_with_timeout(remaining) {
-                Ok(Some(SessionEvent::ServerRequest(request)))
-                    if request.method == "workspace/configuration" =>
-                {
-                    let response = configuration_response(
-                        &self.workspace_configuration,
-                        Some(&request.params),
-                    );
-                    if self.session.respond(request.id, response).is_err() {
+                Ok(Some(event)) => {
+                    if !self.handle_loading_event(event) {
                         return false;
                     }
-                }
-                Ok(Some(event)) => {
-                    self.capture_event(event);
                     if self.loading_state == WorkspaceLoadingState::Ready {
                         return true;
                     }
@@ -915,6 +923,42 @@ impl WorkspaceSession {
                 }
             }
         }
+    }
+
+    /// Handles a single event during the loading drain loop. Returns `false` on transport error.
+    fn handle_loading_event(&mut self, event: SessionEvent) -> bool {
+        match event {
+            SessionEvent::ServerRequest(request)
+                if request.method == "workspace/configuration" =>
+            {
+                let response = configuration_response(
+                    &self.workspace_configuration,
+                    Some(&request.params),
+                );
+                self.session.respond(request.id, response).is_ok()
+            }
+            SessionEvent::ServerRequest(request)
+                if request.method == "window/workDoneProgress/create" =>
+            {
+                self.session.respond(request.id, Value::Null).is_ok()
+            }
+            other => {
+                self.capture_event(other);
+                true
+            }
+        }
+    }
+
+    /// Drains all buffered events, responding to server requests as needed.
+    /// Returns `false` on transport error.
+    fn drain_buffered_events(&mut self) -> bool {
+        let buffered = std::mem::take(&mut self.buffered_events);
+        for event in buffered {
+            if !self.handle_loading_event(event) {
+                return false;
+            }
+        }
+        true
     }
 
     /// Returns the next buffered event or waits up to the provided timeout for a new one.
@@ -981,12 +1025,23 @@ impl WorkspaceSession {
     }
 
     fn update_loading_state(&mut self, token: &Value, progress_value: &Value) {
-        if token != &Value::String(WORKSPACE_PROGRESS_TOKEN.to_owned()) {
-            return;
-        }
+        let token_key = match token {
+            Value::String(s) => s.clone(),
+            Value::Number(n) => n.to_string(),
+            _ => return,
+        };
 
         match progress_value.get("kind").and_then(Value::as_str) {
-            Some("begin") | Some("report") => {
+            Some("begin") => {
+                self.active_progress.insert(token_key);
+                let message = progress_value
+                    .get("title")
+                    .or_else(|| progress_value.get("message"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                self.loading_state = WorkspaceLoadingState::InProgress { message };
+            }
+            Some("report") => {
                 let message = progress_value
                     .get("message")
                     .and_then(Value::as_str)
@@ -994,7 +1049,10 @@ impl WorkspaceSession {
                 self.loading_state = WorkspaceLoadingState::InProgress { message };
             }
             Some("end") => {
-                self.loading_state = WorkspaceLoadingState::Ready;
+                self.active_progress.remove(&token_key);
+                if self.active_progress.is_empty() {
+                    self.loading_state = WorkspaceLoadingState::Ready;
+                }
             }
             _ => {}
         }
@@ -1078,6 +1136,9 @@ fn default_client_capabilities() -> ClientCapabilities {
     serde_json::from_value(json!({
         "general": {
             "positionEncodings": ["utf-8", "utf-16", "utf-32"],
+        },
+        "window": {
+            "workDoneProgress": true,
         },
         "workspace": {
             "applyEdit": true,
