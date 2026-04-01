@@ -248,10 +248,8 @@ fn call_tool(
 fn spawn_server(workspace_root: &Path) -> Result<Child, io::Error> {
     let binary = env!("CARGO_BIN_EXE_rust-lsp-mcp");
     let analyzer = env!("CARGO_BIN_EXE_mock_rust_analyzer");
-    let roots = std::env::join_paths([workspace_root]).expect("join workspace roots");
     Command::new(binary)
         .env("RUST_LSP_MCP_RUST_ANALYZER_BIN", analyzer)
-        .env("RUST_LSP_MCP_WORKSPACE_ROOTS", roots)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())

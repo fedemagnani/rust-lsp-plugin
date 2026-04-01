@@ -71,7 +71,6 @@ fn workspace_registry_routes_requests_by_workspace_root() -> Result<(), Box<dyn 
 fn workspace_registry_returns_structured_errors_for_invalid_or_unknown_roots() -> Result<(), Box<dyn Error>> {
     let server = configured_server();
     let registered_root = create_temp_workspace("registry-known");
-    let unknown_root = create_temp_workspace("registry-unknown");
     server.state().insert_workspace_root(&registered_root)?;
 
     let relative_error = server
@@ -82,16 +81,16 @@ fn workspace_registry_returns_structured_errors_for_invalid_or_unknown_roots() -
         .expect_err("relative root should be rejected");
     assert_eq!(relative_error.kind, ServerErrorKind::InvalidInput);
 
-    let unknown_error = server
+    let nonexistent = PathBuf::from("/tmp/rust-lsp-mcp-nonexistent-root-that-does-not-exist");
+    let nonexistent_error = server
         .state()
-        .with_workspace_session(&unknown_root, "request", |_session| -> Result<(), rust_lsp_mcp::WorkspaceSessionError> {
-            unreachable!("unknown roots should fail before routing")
+        .with_workspace_session(&nonexistent, "request", |_session| -> Result<(), rust_lsp_mcp::WorkspaceSessionError> {
+            unreachable!("nonexistent roots should fail before routing")
         })
-        .expect_err("unknown root should be rejected");
-    assert_eq!(unknown_error.kind, ServerErrorKind::WorkspaceNotFound);
+        .expect_err("nonexistent root should be rejected");
+    assert_eq!(nonexistent_error.kind, ServerErrorKind::InvalidInput);
 
     remove_temp_workspace(&registered_root);
-    remove_temp_workspace(&unknown_root);
     Ok(())
 }
 

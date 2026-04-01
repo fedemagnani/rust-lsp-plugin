@@ -32,10 +32,12 @@ pub use schema::*;
 pub type ServerResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 const DEFAULT_WORKSPACE_READY_TIMEOUT: Duration = Duration::from_secs(1);
+const DEFAULT_MAX_WORKSPACES: usize = 8;
 
 struct WorkspaceEntry {
     session: Mutex<Option<WorkspaceSession>>,
     spawn_count: AtomicUsize,
+    last_used: Mutex<std::time::Instant>,
 }
 
 impl Default for WorkspaceEntry {
@@ -43,7 +45,18 @@ impl Default for WorkspaceEntry {
         Self {
             session: Mutex::new(None),
             spawn_count: AtomicUsize::new(0),
+            last_used: Mutex::new(std::time::Instant::now()),
         }
+    }
+}
+
+impl WorkspaceEntry {
+    fn touch(&self) {
+        *self.last_used.lock().expect("last_used poisoned") = std::time::Instant::now();
+    }
+
+    fn last_used(&self) -> std::time::Instant {
+        *self.last_used.lock().expect("last_used poisoned")
     }
 }
 
@@ -142,13 +155,29 @@ impl WorkspaceSessionConfig {
 }
 
 /// Shared server-owned runtime state that is intentionally kept outside the LSP client layer.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ServerState {
     session_config: RwLock<Option<WorkspaceSessionConfig>>,
     workspaces: RwLock<BTreeMap<PathBuf, Arc<WorkspaceEntry>>>,
+    max_workspaces: AtomicUsize,
+}
+
+impl Default for ServerState {
+    fn default() -> Self {
+        Self {
+            session_config: RwLock::new(None),
+            workspaces: RwLock::new(BTreeMap::new()),
+            max_workspaces: AtomicUsize::new(DEFAULT_MAX_WORKSPACES),
+        }
+    }
 }
 
 impl ServerState {
+    /// Sets the maximum number of concurrent workspace sessions.
+    pub fn set_max_workspaces(&self, max: usize) {
+        self.max_workspaces.store(max, Ordering::SeqCst);
+    }
+
     /// Sets the session configuration used for on-demand workspace creation.
     pub fn set_workspace_session_config(&self, config: WorkspaceSessionConfig) {
         *self
@@ -238,12 +267,37 @@ impl ServerState {
         &self,
         requested_root: &Path,
     ) -> Result<(PathBuf, Arc<WorkspaceEntry>), ServerError> {
-        let root = normalize_requested_workspace_root(requested_root)?;
-        let workspaces = self.workspaces.read().expect("workspace registry poisoned");
-        let entry = workspaces
-            .get(&root)
-            .cloned()
-            .ok_or_else(|| ServerError::workspace_not_found(&root))?;
+        let root = normalize_registered_workspace_root(requested_root)?;
+
+        {
+            let workspaces = self.workspaces.read().expect("workspace registry poisoned");
+            if let Some(entry) = workspaces.get(&root).cloned() {
+                entry.touch();
+                return Ok((root, entry));
+            }
+        }
+
+        let mut workspaces = self.workspaces.write().expect("workspace registry poisoned");
+
+        // Double-check after acquiring the write lock.
+        if let Some(entry) = workspaces.get(&root).cloned() {
+            entry.touch();
+            return Ok((root, entry));
+        }
+
+        // Evict the least-recently-used workspace when at capacity.
+        if workspaces.len() >= self.max_workspaces.load(Ordering::SeqCst) {
+            let lru_root = workspaces
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_used())
+                .map(|(root, _)| root.clone());
+            if let Some(lru_root) = lru_root {
+                workspaces.remove(&lru_root);
+            }
+        }
+
+        let entry = Arc::new(WorkspaceEntry::default());
+        workspaces.insert(root.clone(), Arc::clone(&entry));
         Ok((root, entry))
     }
 }
@@ -333,16 +387,6 @@ fn normalize_registered_workspace_root(root: &Path) -> Result<PathBuf, ServerErr
     }
 
     Ok(normalized)
-}
-
-fn normalize_requested_workspace_root(root: &Path) -> Result<PathBuf, ServerError> {
-    if !root.is_absolute() {
-        return Err(ServerError::invalid_input(
-            "workspace root must be an absolute path",
-        ));
-    }
-
-    std::fs::canonicalize(root).map_err(|_| ServerError::workspace_not_found(root))
 }
 
 fn to_lsp_position(position: TextPosition) -> Position {
