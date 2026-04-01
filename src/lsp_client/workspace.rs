@@ -1033,23 +1033,31 @@ impl WorkspaceSession {
 
         match progress_value.get("kind").and_then(Value::as_str) {
             Some("begin") => {
+                let title = progress_value
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+
+                if !is_workspace_loading_title(title) {
+                    return;
+                }
+
                 self.active_progress.insert(token_key);
                 let message = progress_value
-                    .get("title")
-                    .or_else(|| progress_value.get("message"))
+                    .get("message")
                     .and_then(Value::as_str)
-                    .map(str::to_owned);
+                    .map(str::to_owned)
+                    .or_else(|| Some(title.to_owned()));
                 self.loading_state = WorkspaceLoadingState::InProgress { message };
             }
-            Some("report") => {
+            Some("report") if self.active_progress.contains(&token_key) => {
                 let message = progress_value
                     .get("message")
                     .and_then(Value::as_str)
                     .map(str::to_owned);
                 self.loading_state = WorkspaceLoadingState::InProgress { message };
             }
-            Some("end") => {
-                self.active_progress.remove(&token_key);
+            Some("end") if self.active_progress.remove(&token_key) => {
                 if self.active_progress.is_empty() {
                     self.loading_state = WorkspaceLoadingState::Ready;
                 }
@@ -1374,6 +1382,23 @@ fn percent_encode(segment: &OsStr) -> String {
         }
     }
     encoded
+}
+
+/// Known rust-analyzer progress titles emitted during workspace loading.
+const WORKSPACE_LOADING_TITLES: &[&str] = &[
+    "Fetching",
+    "Building compile-time-deps",
+    "Loading proc-macros",
+    "Roots Scanned",
+    "Indexing",
+    "Collecting Symbols",
+    "Building CrateGraph",
+];
+
+fn is_workspace_loading_title(title: &str) -> bool {
+    WORKSPACE_LOADING_TITLES
+        .iter()
+        .any(|known| title.eq_ignore_ascii_case(known))
 }
 
 fn is_progress_notification(event: &SessionEvent) -> bool {
