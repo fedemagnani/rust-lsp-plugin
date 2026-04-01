@@ -505,6 +505,19 @@ fn main() -> io::Result<()> {
                         }
                     }),
                 )?;
+                // Register the progress token via window/workDoneProgress/create
+                // so the client tracks it in registered_progress_tokens.
+                write_message(
+                    &mut writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "method": "window/workDoneProgress/create",
+                        "id": "progress-create-workspace",
+                        "params": {
+                            "token": "rustAnalyzer/workspace"
+                        }
+                    }),
+                )?;
                 write_message(
                     &mut writer,
                     &json!({
@@ -621,6 +634,9 @@ fn main() -> io::Result<()> {
             }
             (None, Some(id)) if id == json!("config-1") => {
                 config_response = message.get("result").cloned().unwrap_or(Value::Null);
+            }
+            (None, Some(id)) if id == json!("progress-create-workspace") => {
+                // Response to window/workDoneProgress/create — nothing to store.
             }
             (Some(method), None) => {
                 record_notification(&mut writer, &mut notifications, method)?;
