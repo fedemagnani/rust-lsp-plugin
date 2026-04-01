@@ -25,7 +25,8 @@ use std::time::Duration;
 const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(1);
 /// Grace period after all progress tokens end before declaring the workspace truly ready.
 /// Bridges gaps between sequential rust-analyzer loading phases (e.g. Fetching → Indexing).
-const LOADING_PHASE_GRACE: Duration = Duration::from_secs(3);
+/// Kept short (1s) since rust-analyzer typically starts the next phase within milliseconds.
+const LOADING_PHASE_GRACE: Duration = Duration::from_secs(1);
 
 /// High-level session phase for the LSP initialization lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
