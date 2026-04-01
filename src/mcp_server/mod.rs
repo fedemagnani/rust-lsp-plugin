@@ -34,6 +34,7 @@ pub type ServerResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 const DEFAULT_WORKSPACE_READY_TIMEOUT: Duration = Duration::from_secs(1);
 const DEFAULT_WORKSPACE_LOADING_TIMEOUT: Duration = Duration::from_secs(60);
+const LOADING_RETRY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Configuration used to create per-workspace rust-analyzer sessions on demand.
 #[derive(Debug, Clone)]
@@ -211,6 +212,12 @@ impl ServerState {
         let (_, session) = slot
             .as_mut()
             .expect("workspace session initialized before routing");
+
+        // Give rust-analyzer a short window to catch up — it may have finished loading since the
+        // last check but we haven't drained the progress events yet.
+        if *session.loading_state() != WorkspaceLoadingState::Ready {
+            session.wait_until_loaded(LOADING_RETRY_TIMEOUT);
+        }
 
         match session.loading_state() {
             WorkspaceLoadingState::Ready => {}
