@@ -620,9 +620,9 @@ impl WorkspaceSession {
     /// Performs `rust-analyzer/rebuildProcMacros` and resets the loading state so that
     /// subsequent progress events are tracked for the new loading cycle.
     pub fn rebuild_proc_macros(&mut self) -> Result<(), WorkspaceSessionError> {
-        let result = self.request_typed::<ra::RebuildProcMacros>(());
+        self.request_typed::<ra::RebuildProcMacros>(())?;
         self.reset_loading_state();
-        result
+        Ok(())
     }
 
     /// Resets loading state so that new progress events are tracked from scratch.
