@@ -54,9 +54,7 @@ fn mcp_server_exposes_representative_read_only_analysis_tools() -> Result<(), Bo
     ];
     let read_only_tools: Vec<_> = tools
         .iter()
-        .filter(|tool| {
-            read_only_names.contains(&tool["name"].as_str().unwrap_or(""))
-        })
+        .filter(|tool| read_only_names.contains(&tool["name"].as_str().unwrap_or("")))
         .collect();
     assert_eq!(read_only_tools.len(), read_only_names.len());
     assert!(read_only_tools.iter().all(|tool| {
@@ -115,7 +113,13 @@ fn mcp_server_exposes_representative_read_only_analysis_tools() -> Result<(), Bo
             "position": { "line": 5, "character": 4 }
         }),
     )?;
-    assert_eq!(references_result["structuredContent"]["data"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        references_result["structuredContent"]["data"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
 
     let symbols_result = call_tool(
         &mut stdin,
@@ -127,7 +131,10 @@ fn mcp_server_exposes_representative_read_only_analysis_tools() -> Result<(), Bo
             "query": "answer"
         }),
     )?;
-    assert_eq!(symbols_result["structuredContent"]["data"][0]["name"], json!("answer"));
+    assert_eq!(
+        symbols_result["structuredContent"]["data"][0]["name"],
+        json!("answer")
+    );
     assert_eq!(
         symbols_result["structuredContent"]["data"][0]["container_name"],
         json!("crate")
@@ -245,7 +252,7 @@ fn call_tool(
     Ok(response["result"].clone())
 }
 
-fn spawn_server(workspace_root: &Path) -> Result<Child, io::Error> {
+fn spawn_server(_workspace_root: &Path) -> Result<Child, io::Error> {
     let binary = env!("CARGO_BIN_EXE_rust-lsp-mcp");
     let analyzer = env!("CARGO_BIN_EXE_mock_rust_analyzer");
     Command::new(binary)
