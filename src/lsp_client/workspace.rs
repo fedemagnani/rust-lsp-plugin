@@ -602,14 +602,26 @@ impl WorkspaceSession {
         self.request_typed::<ra::FetchDependencyList>(ra::FetchDependencyListParams::default())
     }
 
-    /// Performs `rust-analyzer/reloadWorkspace`.
-    pub fn reload_workspace(&self) -> Result<(), WorkspaceSessionError> {
-        self.request_typed::<ra::ReloadWorkspace>(())
+    /// Performs `rust-analyzer/reloadWorkspace` and resets the loading state so that
+    /// subsequent progress events are tracked for the new loading cycle.
+    pub fn reload_workspace(&mut self) -> Result<(), WorkspaceSessionError> {
+        let result = self.request_typed::<ra::ReloadWorkspace>(());
+        self.reset_loading_state();
+        result
     }
 
-    /// Performs `rust-analyzer/rebuildProcMacros`.
-    pub fn rebuild_proc_macros(&self) -> Result<(), WorkspaceSessionError> {
-        self.request_typed::<ra::RebuildProcMacros>(())
+    /// Performs `rust-analyzer/rebuildProcMacros` and resets the loading state so that
+    /// subsequent progress events are tracked for the new loading cycle.
+    pub fn rebuild_proc_macros(&mut self) -> Result<(), WorkspaceSessionError> {
+        let result = self.request_typed::<ra::RebuildProcMacros>(());
+        self.reset_loading_state();
+        result
+    }
+
+    /// Resets loading state so that new progress events are tracked from scratch.
+    fn reset_loading_state(&mut self) {
+        self.active_progress.clear();
+        self.loading_state = WorkspaceLoadingState::NotStarted;
     }
 
     /// Performs `rust-analyzer/viewSyntaxTree`.

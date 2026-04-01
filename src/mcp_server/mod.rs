@@ -1035,8 +1035,15 @@ impl RustAnalyzerMcpServer {
         params: Parameters<WorkspaceRootInput>,
     ) -> Result<Json<MutatingToolResult<()>>, ErrorData> {
         let workspace_root = params.0.workspace_root;
+        let loading_timeout = self
+            .state
+            .workspace_session_config()
+            .map(|c| c.workspace_loading_timeout)
+            .unwrap_or(DEFAULT_WORKSPACE_LOADING_TIMEOUT);
         self.with_workspace_session_blocking(workspace_root, "reload_workspace", move |session| {
-            session.reload_workspace()
+            session.reload_workspace()?;
+            session.wait_until_loaded(loading_timeout);
+            Ok(())
         })
         .await?;
 
@@ -1063,10 +1070,19 @@ impl RustAnalyzerMcpServer {
         params: Parameters<WorkspaceRootInput>,
     ) -> Result<Json<MutatingToolResult<()>>, ErrorData> {
         let workspace_root = params.0.workspace_root;
+        let loading_timeout = self
+            .state
+            .workspace_session_config()
+            .map(|c| c.workspace_loading_timeout)
+            .unwrap_or(DEFAULT_WORKSPACE_LOADING_TIMEOUT);
         self.with_workspace_session_blocking(
             workspace_root,
             "rebuild_proc_macros",
-            move |session| session.rebuild_proc_macros(),
+            move |session| {
+                session.rebuild_proc_macros()?;
+                session.wait_until_loaded(loading_timeout);
+                Ok(())
+            },
         )
         .await?;
 
