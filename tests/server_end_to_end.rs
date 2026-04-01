@@ -41,7 +41,10 @@ fn mcp_server_switches_workspace_when_root_changes() -> Result<(), Box<dyn Error
             "position": { "line": 0, "character": 7 }
         }),
     )?;
-    assert!(hover_a.get("structuredContent").is_some(), "hover on workspace A returned data");
+    assert!(
+        hover_a.get("structuredContent").is_some(),
+        "hover on workspace A returned data"
+    );
 
     let hover_b = call_tool(
         &mut stdin,
@@ -54,7 +57,10 @@ fn mcp_server_switches_workspace_when_root_changes() -> Result<(), Box<dyn Error
             "position": { "line": 0, "character": 7 }
         }),
     )?;
-    assert!(hover_b.get("structuredContent").is_some(), "hover on workspace B returned data");
+    assert!(
+        hover_b.get("structuredContent").is_some(),
+        "hover on workspace B returned data"
+    );
 
     let symbols_a = call_tool(
         &mut stdin,
@@ -172,7 +178,10 @@ fn mcp_server_exercises_stateful_tool_flows() -> Result<(), Box<dyn Error>> {
         }),
     )?;
     next_id += 1;
-    assert_eq!(open_result["structuredContent"]["data"]["version"], json!(0));
+    assert_eq!(
+        open_result["structuredContent"]["data"]["version"],
+        json!(0)
+    );
     assert!(
         open_result["structuredContent"]["data"]["document_path"]
             .as_str()
@@ -194,7 +203,10 @@ fn mcp_server_exercises_stateful_tool_flows() -> Result<(), Box<dyn Error>> {
         }),
     )?;
     next_id += 1;
-    assert_eq!(change_result["structuredContent"]["data"]["version"], json!(1));
+    assert_eq!(
+        change_result["structuredContent"]["data"]["version"],
+        json!(1)
+    );
 
     // -- rename_symbol --
     let rename_result = call_tool(
@@ -216,7 +228,9 @@ fn mcp_server_exercises_stateful_tool_flows() -> Result<(), Box<dyn Error>> {
     );
     let workspace_edit = &rename_result["structuredContent"]["workspace_edit"];
     assert!(
-        workspace_edit["changes"].as_array().map_or(false, |c| !c.is_empty()),
+        workspace_edit["changes"]
+            .as_array()
+            .is_some_and(|c| !c.is_empty()),
         "rename should produce workspace edit changes"
     );
 

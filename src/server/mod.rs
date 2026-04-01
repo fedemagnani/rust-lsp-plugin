@@ -4,17 +4,17 @@ mod error;
 mod schema;
 
 use crate::{
-    CreateFile, DeleteFile, DocumentChangeOperation, DocumentChanges,
-    GotoDefinitionResponse, HoverContents, MarkedString, MarkupKind, OneOf, Position, Range,
-    RenameFile, ResourceOp, SymbolInformation, SymbolKind, TextEdit, Uri, WorkspaceEdit,
-    WorkspaceLocation, WorkspaceSession, WorkspaceSessionBuilder, WorkspaceSessionError,
-    WorkspaceSessionPhase, WorkspaceSymbol, WorkspaceSymbolResponse,
+    CreateFile, DeleteFile, DocumentChangeOperation, DocumentChanges, GotoDefinitionResponse,
+    HoverContents, MarkedString, MarkupKind, OneOf, Position, Range, RenameFile, ResourceOp,
+    SymbolInformation, SymbolKind, TextEdit, Uri, WorkspaceEdit, WorkspaceLocation,
+    WorkspaceSession, WorkspaceSessionBuilder, WorkspaceSessionError, WorkspaceSessionPhase,
+    WorkspaceSymbol, WorkspaceSymbolResponse,
 };
-use rmcp::handler::server::wrapper::Parameters;
 use rmcp::handler::server::router::tool::ToolRouter;
+use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{ProtocolVersion, ServerCapabilities, ServerInfo};
 use rmcp::transport::stdio;
-use rmcp::{ErrorData, Json, ServiceExt, ServerHandler};
+use rmcp::{ErrorData, Json, ServerHandler, ServiceExt};
 use rmcp_macros::{tool, tool_handler, tool_router};
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
@@ -190,9 +190,7 @@ impl ServerState {
             if let Some((_, mut old_session)) = slot.take() {
                 let _ = old_session.shutdown();
             }
-            let session = config
-                .spawn_initialized(&root)
-                .map_err(ServerError::from)?;
+            let session = config.spawn_initialized(&root).map_err(ServerError::from)?;
             *slot = Some((root.clone(), session));
         }
 
@@ -350,14 +348,12 @@ fn normalize_definitions(definitions: Option<GotoDefinitionResponse>) -> Vec<Doc
 fn normalize_workspace_symbols(symbols: Option<WorkspaceSymbolResponse>) -> Vec<SymbolSummary> {
     match symbols {
         None => Vec::new(),
-        Some(WorkspaceSymbolResponse::Flat(symbols)) => symbols
-            .into_iter()
-            .map(normalize_flat_symbol)
-            .collect(),
-        Some(WorkspaceSymbolResponse::Nested(symbols)) => symbols
-            .into_iter()
-            .map(normalize_nested_symbol)
-            .collect(),
+        Some(WorkspaceSymbolResponse::Flat(symbols)) => {
+            symbols.into_iter().map(normalize_flat_symbol).collect()
+        }
+        Some(WorkspaceSymbolResponse::Nested(symbols)) => {
+            symbols.into_iter().map(normalize_nested_symbol).collect()
+        }
     }
 }
 
@@ -546,9 +542,7 @@ fn normalize_workspace_edit(edit: WorkspaceEdit) -> WorkspaceEditSummary {
                                     .edits
                                     .into_iter()
                                     .map(|e| match e {
-                                        OneOf::Left(text_edit) => {
-                                            normalize_text_edit(text_edit)
-                                        }
+                                        OneOf::Left(text_edit) => normalize_text_edit(text_edit),
                                         OneOf::Right(annotated) => {
                                             normalize_text_edit(annotated.text_edit)
                                         }
@@ -809,17 +803,13 @@ impl RustAnalyzerMcpServer {
         let language_id = params.language_id.unwrap_or_else(|| "rust".to_owned());
         let text = params.text;
         let result = self
-            .with_workspace_session_blocking(
-                workspace_root,
-                "open_document",
-                move |session| {
-                    let tracked = session.open_document(&document_path, language_id, 0, text)?;
-                    Ok(OpenDocumentSummary {
-                        document_path: tracked.path.clone(),
-                        version: tracked.version(),
-                    })
-                },
-            )
+            .with_workspace_session_blocking(workspace_root, "open_document", move |session| {
+                let tracked = session.open_document(&document_path, language_id, 0, text)?;
+                Ok(OpenDocumentSummary {
+                    document_path: tracked.path.clone(),
+                    version: tracked.version(),
+                })
+            })
             .await?;
 
         Ok(Json(MutatingToolResult {
@@ -850,17 +840,13 @@ impl RustAnalyzerMcpServer {
         let version = params.version;
         let text = params.text;
         let result = self
-            .with_workspace_session_blocking(
-                workspace_root,
-                "change_document",
-                move |session| {
-                    let tracked = session.change_document(&document_path, version, text)?;
-                    Ok(ChangeDocumentSummary {
-                        document_path: tracked.path.clone(),
-                        version: tracked.version(),
-                    })
-                },
-            )
+            .with_workspace_session_blocking(workspace_root, "change_document", move |session| {
+                let tracked = session.change_document(&document_path, version, text)?;
+                Ok(ChangeDocumentSummary {
+                    document_path: tracked.path.clone(),
+                    version: tracked.version(),
+                })
+            })
             .await?;
 
         Ok(Json(MutatingToolResult {
@@ -889,16 +875,12 @@ impl RustAnalyzerMcpServer {
         let workspace_root = params.workspace_root;
         let document_path = params.document_path;
         let result = self
-            .with_workspace_session_blocking(
-                workspace_root,
-                "close_document",
-                move |session| {
-                    let tracked = session.close_document(&document_path)?;
-                    Ok(CloseDocumentSummary {
-                        document_path: tracked.path,
-                    })
-                },
-            )
+            .with_workspace_session_blocking(workspace_root, "close_document", move |session| {
+                let tracked = session.close_document(&document_path)?;
+                Ok(CloseDocumentSummary {
+                    document_path: tracked.path,
+                })
+            })
             .await?;
 
         Ok(Json(MutatingToolResult {
@@ -929,20 +911,15 @@ impl RustAnalyzerMcpServer {
         let position = to_lsp_position(params.position);
         let new_name = params.new_name;
         let (summary, edit) = self
-            .with_workspace_session_blocking(
-                workspace_root,
-                "rename_symbol",
-                move |session| {
-                    let workspace_edit =
-                        session.rename(&document_path, position, &new_name)?;
-                    Ok((
-                        RenameSummary {
-                            new_name: new_name.clone(),
-                        },
-                        workspace_edit,
-                    ))
-                },
-            )
+            .with_workspace_session_blocking(workspace_root, "rename_symbol", move |session| {
+                let workspace_edit = session.rename(&document_path, position, &new_name)?;
+                Ok((
+                    RenameSummary {
+                        new_name: new_name.clone(),
+                    },
+                    workspace_edit,
+                ))
+            })
             .await?;
 
         Ok(Json(MutatingToolResult {
@@ -968,11 +945,9 @@ impl RustAnalyzerMcpServer {
         params: Parameters<WorkspaceRootInput>,
     ) -> Result<Json<MutatingToolResult<()>>, ErrorData> {
         let workspace_root = params.0.workspace_root;
-        self.with_workspace_session_blocking(
-            workspace_root,
-            "reload_workspace",
-            move |session| session.reload_workspace(),
-        )
+        self.with_workspace_session_blocking(workspace_root, "reload_workspace", move |session| {
+            session.reload_workspace()
+        })
         .await?;
 
         Ok(Json(MutatingToolResult {
@@ -1024,7 +999,6 @@ impl ServerHandler for RustAnalyzerMcpServer {
                     .into(),
             ),
             server_info: rmcp::model::Implementation::from_build_env(),
-            ..Default::default()
         }
     }
 }
@@ -1057,7 +1031,10 @@ mod tests {
     fn symbol_kind_names_are_stable_for_known_variants() {
         assert_eq!(symbol_kind_name(SymbolKind::FUNCTION), "function");
         assert_eq!(symbol_kind_name(SymbolKind::ENUM_MEMBER), "enum_member");
-        assert_eq!(symbol_kind_name(SymbolKind::TYPE_PARAMETER), "type_parameter");
+        assert_eq!(
+            symbol_kind_name(SymbolKind::TYPE_PARAMETER),
+            "type_parameter"
+        );
     }
 
     #[test]
