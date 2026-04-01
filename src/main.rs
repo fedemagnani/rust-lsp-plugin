@@ -16,12 +16,5 @@ fn configure_from_env(server: &RustAnalyzerMcpServer) -> rust_lsp_mcp::ServerRes
             .set_workspace_session_config(WorkspaceSessionConfig::new(program));
     }
 
-    if let Ok(max) = std::env::var("RUST_LSP_MCP_MAX_WORKSPACES") {
-        let max: usize = max.parse().map_err(|_| -> Box<dyn std::error::Error + Send + Sync> {
-            format!("RUST_LSP_MCP_MAX_WORKSPACES must be a positive integer, got: {max}").into()
-        })?;
-        server.state().set_max_workspaces(max);
-    }
-
     Ok(())
 }

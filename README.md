@@ -40,8 +40,6 @@ codex mcp add \
   -- /absolute/path/to/rust-lsp-mcp
 ```
 
-Workspace roots are registered automatically when the agent calls a tool with a `workspace_root`
-parameter, so the server works globally across any Rust project.
-
-The server keeps at most 8 concurrent rust-analyzer sessions and evicts the least-recently-used
-one when the limit is reached. Override with `--env RUST_LSP_MCP_MAX_WORKSPACES=16`.
+The server manages a single rust-analyzer session at a time. The workspace root is set
+automatically on the first tool call. If a tool call targets a different workspace root, the
+previous session is shut down and replaced.

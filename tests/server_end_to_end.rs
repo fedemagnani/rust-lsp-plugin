@@ -10,13 +10,13 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 // ---------------------------------------------------------------------------
-// Multi-workspace routing: two registered roots, tool calls hit the right one
+// Workspace switching: tool calls with a different root replace the session
 // ---------------------------------------------------------------------------
 
 #[test]
-fn mcp_server_routes_tool_calls_to_the_correct_workspace() -> Result<(), Box<dyn Error>> {
-    let workspace_a = create_temp_workspace("e2e-route-a");
-    let workspace_b = create_temp_workspace("e2e-route-b");
+fn mcp_server_switches_workspace_when_root_changes() -> Result<(), Box<dyn Error>> {
+    let workspace_a = create_temp_workspace("e2e-switch-a");
+    let workspace_b = create_temp_workspace("e2e-switch-b");
     let file_a = workspace_a.join("src").join("lib.rs");
     let file_b = workspace_b.join("src").join("lib.rs");
     fs::create_dir_all(file_a.parent().unwrap())?;
@@ -24,8 +24,7 @@ fn mcp_server_routes_tool_calls_to_the_correct_workspace() -> Result<(), Box<dyn
     fs::write(&file_a, "pub fn alpha() -> u32 { 1 }\n")?;
     fs::write(&file_b, "pub fn beta() -> u32 { 2 }\n")?;
 
-    let roots = std::env::join_paths([&workspace_a, &workspace_b])?;
-    let mut child = spawn_server_with_roots(&roots)?;
+    let mut child = spawn_server(&workspace_a)?;
     let mut stdin = child.stdin.take().unwrap();
     let mut stdout = BufReader::new(child.stdout.take().unwrap());
 
@@ -371,17 +370,6 @@ fn call_tool(
 }
 
 fn spawn_server(_workspace_root: &Path) -> Result<Child, io::Error> {
-    let binary = env!("CARGO_BIN_EXE_rust-lsp-mcp");
-    let analyzer = env!("CARGO_BIN_EXE_mock_rust_analyzer");
-    Command::new(binary)
-        .env("RUST_LSP_MCP_RUST_ANALYZER_BIN", analyzer)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-}
-
-fn spawn_server_with_roots(_roots: &std::ffi::OsStr) -> Result<Child, io::Error> {
     let binary = env!("CARGO_BIN_EXE_rust-lsp-mcp");
     let analyzer = env!("CARGO_BIN_EXE_mock_rust_analyzer");
     Command::new(binary)

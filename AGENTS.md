@@ -6,7 +6,7 @@ This project aims to build a Rust client for `rust-analyzer` and then expose its
 
 The intended design is:
 
-- one `rust-analyzer` process per workspace root
+- a single `rust-analyzer` session active at a time, replaced when the workspace root changes
 - JSON-RPC 2.0 over LSP using `stdio`
 - `lsp-server` as the default transport/message layer
 - `lsp-types` as the default protocol type layer
