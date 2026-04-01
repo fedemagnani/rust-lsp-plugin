@@ -8,10 +8,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[test]
-fn workspace_registry_reuses_existing_session_for_the_same_root() -> Result<(), Box<dyn Error>> {
+fn workspace_session_reuses_existing_session_for_the_same_root() -> Result<(), Box<dyn Error>> {
     let server = configured_server();
-    let workspace_root = create_temp_workspace("registry-reuse");
-    server.state().insert_workspace_root(&workspace_root)?;
+    let workspace_root = create_temp_workspace("session-reuse");
 
     let first_state = server
         .state()
@@ -30,37 +29,36 @@ fn workspace_registry_reuses_existing_session_for_the_same_root() -> Result<(), 
         first_state["initialize_params"]["rootPath"],
         second_state["initialize_params"]["rootPath"]
     );
-    assert_eq!(server.state().session_spawn_count(&workspace_root)?, 1);
 
     remove_temp_workspace(&workspace_root);
     Ok(())
 }
 
 #[test]
-fn workspace_registry_routes_requests_by_workspace_root() -> Result<(), Box<dyn Error>> {
+fn workspace_session_replaces_when_root_changes() -> Result<(), Box<dyn Error>> {
     let server = configured_server();
-    let workspace_one = create_temp_workspace("registry-route-one");
-    let workspace_two = create_temp_workspace("registry-route-two");
-    server.state().insert_workspace_root(&workspace_one)?;
-    server.state().insert_workspace_root(&workspace_two)?;
+    let workspace_one = create_temp_workspace("session-replace-one");
+    let workspace_two = create_temp_workspace("session-replace-two");
 
-    let first_state = server
+    server
         .state()
         .with_workspace_session(&workspace_one, "request", |session| {
             session.request("state", json!(null))
         })?;
-    let second_state = server
+    assert_eq!(
+        server.state().active_workspace_root().as_deref(),
+        Some(std::fs::canonicalize(&workspace_one)?.as_path())
+    );
+
+    server
         .state()
         .with_workspace_session(&workspace_two, "request", |session| {
             session.request("state", json!(null))
         })?;
-
-    assert_ne!(
-        first_state["initialize_params"]["rootPath"],
-        second_state["initialize_params"]["rootPath"]
+    assert_eq!(
+        server.state().active_workspace_root().as_deref(),
+        Some(std::fs::canonicalize(&workspace_two)?.as_path())
     );
-    assert_eq!(server.state().session_spawn_count(&workspace_one)?, 1);
-    assert_eq!(server.state().session_spawn_count(&workspace_two)?, 1);
 
     remove_temp_workspace(&workspace_one);
     remove_temp_workspace(&workspace_two);
@@ -68,11 +66,8 @@ fn workspace_registry_routes_requests_by_workspace_root() -> Result<(), Box<dyn 
 }
 
 #[test]
-fn workspace_registry_returns_structured_errors_for_invalid_or_unknown_roots() -> Result<(), Box<dyn Error>> {
+fn workspace_session_returns_structured_errors_for_invalid_roots() -> Result<(), Box<dyn Error>> {
     let server = configured_server();
-    let registered_root = create_temp_workspace("registry-known");
-    let unknown_root = create_temp_workspace("registry-unknown");
-    server.state().insert_workspace_root(&registered_root)?;
 
     let relative_error = server
         .state()
@@ -82,16 +77,15 @@ fn workspace_registry_returns_structured_errors_for_invalid_or_unknown_roots() -
         .expect_err("relative root should be rejected");
     assert_eq!(relative_error.kind, ServerErrorKind::InvalidInput);
 
-    let unknown_error = server
+    let nonexistent = PathBuf::from("/tmp/rust-lsp-mcp-nonexistent-root-that-does-not-exist");
+    let nonexistent_error = server
         .state()
-        .with_workspace_session(&unknown_root, "request", |_session| -> Result<(), rust_lsp_mcp::WorkspaceSessionError> {
-            unreachable!("unknown roots should fail before routing")
+        .with_workspace_session(&nonexistent, "request", |_session| -> Result<(), rust_lsp_mcp::WorkspaceSessionError> {
+            unreachable!("nonexistent roots should fail before routing")
         })
-        .expect_err("unknown root should be rejected");
-    assert_eq!(unknown_error.kind, ServerErrorKind::WorkspaceNotFound);
+        .expect_err("nonexistent root should be rejected");
+    assert_eq!(nonexistent_error.kind, ServerErrorKind::InvalidInput);
 
-    remove_temp_workspace(&registered_root);
-    remove_temp_workspace(&unknown_root);
     Ok(())
 }
 

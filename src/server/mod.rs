@@ -16,11 +16,9 @@ use rmcp::model::{ProtocolVersion, ServerCapabilities, ServerInfo};
 use rmcp::transport::stdio;
 use rmcp::{ErrorData, Json, ServiceExt, ServerHandler};
 use rmcp_macros::{tool, tool_handler, tool_router};
-use std::collections::BTreeMap;
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use tokio::task;
@@ -32,34 +30,6 @@ pub use schema::*;
 pub type ServerResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 const DEFAULT_WORKSPACE_READY_TIMEOUT: Duration = Duration::from_secs(1);
-
-struct WorkspaceEntry {
-    session: Mutex<Option<WorkspaceSession>>,
-    spawn_count: AtomicUsize,
-}
-
-impl Default for WorkspaceEntry {
-    fn default() -> Self {
-        Self {
-            session: Mutex::new(None),
-            spawn_count: AtomicUsize::new(0),
-        }
-    }
-}
-
-impl std::fmt::Debug for WorkspaceEntry {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let session_present = self
-            .session
-            .lock()
-            .map(|slot| slot.is_some())
-            .unwrap_or(false);
-        f.debug_struct("WorkspaceEntry")
-            .field("session_present", &session_present)
-            .field("spawn_count", &self.spawn_count.load(Ordering::SeqCst))
-            .finish()
-    }
-}
 
 /// Configuration used to create per-workspace rust-analyzer sessions on demand.
 #[derive(Debug, Clone)]
@@ -142,10 +112,22 @@ impl WorkspaceSessionConfig {
 }
 
 /// Shared server-owned runtime state that is intentionally kept outside the LSP client layer.
-#[derive(Debug, Default)]
+///
+/// The server manages at most one rust-analyzer session at a time. When a tool call targets a
+/// different workspace root, the previous session is shut down and replaced.
+#[derive(Default)]
 pub struct ServerState {
     session_config: RwLock<Option<WorkspaceSessionConfig>>,
-    workspaces: RwLock<BTreeMap<PathBuf, Arc<WorkspaceEntry>>>,
+    workspace: Mutex<Option<(PathBuf, WorkspaceSession)>>,
+}
+
+impl std::fmt::Debug for ServerState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let active_root = self.active_workspace_root();
+        f.debug_struct("ServerState")
+            .field("active_workspace_root", &active_root)
+            .finish()
+    }
 }
 
 impl ServerState {
@@ -165,37 +147,16 @@ impl ServerState {
             .clone()
     }
 
-    /// Registers a workspace root for future tool routing.
-    pub fn insert_workspace_root(&self, root: impl AsRef<Path>) -> Result<bool, ServerError> {
-        let root = normalize_registered_workspace_root(root.as_ref())?;
-        let mut workspaces = self.workspaces.write().expect("workspace registry poisoned");
-        Ok(match workspaces.entry(root) {
-            std::collections::btree_map::Entry::Vacant(entry) => {
-                entry.insert(Arc::new(WorkspaceEntry::default()));
-                true
-            }
-            std::collections::btree_map::Entry::Occupied(_) => false,
-        })
-    }
-
-    /// Returns the currently tracked workspace roots.
-    pub fn workspace_roots(&self) -> Vec<PathBuf> {
-        self.workspaces
-            .read()
-            .expect("workspace registry poisoned")
-            .iter()
+    /// Returns the currently active workspace root, if any.
+    pub fn active_workspace_root(&self) -> Option<PathBuf> {
+        self.workspace
+            .lock()
+            .expect("workspace poisoned")
+            .as_ref()
             .map(|(root, _)| root.clone())
-            .collect()
     }
 
-    /// Returns how many times a root's session has been spawned.
-    pub fn session_spawn_count(&self, root: impl AsRef<Path>) -> Result<usize, ServerError> {
-        let (root, entry) = self.resolve_workspace_entry(root.as_ref())?;
-        let _ = root;
-        Ok(entry.spawn_count.load(Ordering::SeqCst))
-    }
-
-    /// Routes work to the correct workspace session, creating and initializing it on demand.
+    /// Routes work to the workspace session, creating or replacing it on demand.
     pub fn with_workspace_session<T, F>(
         &self,
         root: impl AsRef<Path>,
@@ -205,46 +166,40 @@ impl ServerState {
     where
         F: FnOnce(&mut WorkspaceSession) -> Result<T, WorkspaceSessionError>,
     {
-        let (root, entry) = self.resolve_workspace_entry(root.as_ref())?;
+        let root = normalize_workspace_root(root.as_ref())?;
         let config = self
             .workspace_session_config()
             .ok_or_else(|| ServerError::internal("workspace session config is not set"))?;
 
-        let mut session_slot = entry.session.lock().expect("workspace session poisoned");
-        let must_spawn = match session_slot.as_ref() {
+        let mut slot = self.workspace.lock().expect("workspace poisoned");
+
+        let must_spawn = match slot.as_ref() {
             None => true,
-            Some(session) => matches!(
-                session.phase(),
-                WorkspaceSessionPhase::Failed | WorkspaceSessionPhase::Shutdown
-            ) || session.is_disconnected(),
+            Some((current_root, session)) => {
+                *current_root != root
+                    || matches!(
+                        session.phase(),
+                        WorkspaceSessionPhase::Failed | WorkspaceSessionPhase::Shutdown
+                    )
+                    || session.is_disconnected()
+            }
         };
 
         if must_spawn {
-            *session_slot = Some(
-                config
-                    .spawn_initialized(&root)
-                    .map_err(ServerError::from)?
-            );
-            entry.spawn_count.fetch_add(1, Ordering::SeqCst);
+            // Gracefully shut down the old session before replacing it.
+            if let Some((_, mut old_session)) = slot.take() {
+                let _ = old_session.shutdown();
+            }
+            let session = config
+                .spawn_initialized(&root)
+                .map_err(ServerError::from)?;
+            *slot = Some((root.clone(), session));
         }
 
-        let session = session_slot
+        let (_, session) = slot
             .as_mut()
             .expect("workspace session initialized before routing");
         f(session).map_err(|error| ServerError::from(error).with_operation(operation))
-    }
-
-    fn resolve_workspace_entry(
-        &self,
-        requested_root: &Path,
-    ) -> Result<(PathBuf, Arc<WorkspaceEntry>), ServerError> {
-        let root = normalize_requested_workspace_root(requested_root)?;
-        let workspaces = self.workspaces.read().expect("workspace registry poisoned");
-        let entry = workspaces
-            .get(&root)
-            .cloned()
-            .ok_or_else(|| ServerError::workspace_not_found(&root))?;
-        Ok((root, entry))
     }
 }
 
@@ -311,7 +266,7 @@ impl RustAnalyzerMcpServer {
     }
 }
 
-fn normalize_registered_workspace_root(root: &Path) -> Result<PathBuf, ServerError> {
+fn normalize_workspace_root(root: &Path) -> Result<PathBuf, ServerError> {
     if !root.is_absolute() {
         return Err(ServerError::invalid_input(
             "workspace root must be an absolute path",
@@ -333,16 +288,6 @@ fn normalize_registered_workspace_root(root: &Path) -> Result<PathBuf, ServerErr
     }
 
     Ok(normalized)
-}
-
-fn normalize_requested_workspace_root(root: &Path) -> Result<PathBuf, ServerError> {
-    if !root.is_absolute() {
-        return Err(ServerError::invalid_input(
-            "workspace root must be an absolute path",
-        ));
-    }
-
-    std::fs::canonicalize(root).map_err(|_| ServerError::workspace_not_found(root))
 }
 
 fn to_lsp_position(position: TextPosition) -> Position {

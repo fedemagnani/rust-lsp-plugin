@@ -20,6 +20,11 @@
       "source": "fedemagnani/harness-eng-skills",
       "sourceType": "github",
       "computedHash": "84befc8900a5c92c392212b4437deff461105c8c48ef9cccf8b4dd6ec616eccc"
+    },
+    "skill-creator": {
+      "source": "fedemagnani/harness-eng-skills",
+      "sourceType": "github",
+      "computedHash": "44de1413c3bf1d4594c0745f4d03f3a62a5b927e1804e8947e0f1efb837cc361"
     }
   }
 }
