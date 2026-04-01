@@ -1,8 +1,9 @@
-use rust_lsp_mcp::{
+use lsp_types::{
     CompletionContext, CompletionResponse, CompletionTriggerKind, DocumentSymbolResponse,
     GotoDefinitionResponse, HoverContents, MarkupKind, OneOf, Position, PrepareRenameResponse,
-    SymbolKind, WorkspaceSessionBuilder, WorkspaceSymbolResponse,
+    SymbolKind, WorkspaceSymbolResponse,
 };
+use rust_lsp_mcp::lsp_client::WorkspaceSessionBuilder;
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -132,7 +133,7 @@ fn exposes_typed_core_lsp_requests() -> Result<(), Box<dyn Error>> {
     let edits = edit
         .changes
         .as_ref()
-        .and_then(|changes| {
+        .and_then(|changes: &std::collections::HashMap<lsp_types::Uri, Vec<lsp_types::TextEdit>>| {
             changes
                 .iter()
                 .find_map(|(uri, edits)| (uri == &file_uri).then_some(edits))
@@ -185,7 +186,7 @@ fn exposes_typed_core_lsp_requests() -> Result<(), Box<dyn Error>> {
 
 fn spawn_workspace_session(
     workspace_root: &Path,
-) -> Result<rust_lsp_mcp::WorkspaceSession, Box<dyn Error>> {
+) -> Result<rust_lsp_mcp::lsp_client::WorkspaceSession, Box<dyn Error>> {
     let program = std::env::var("CARGO_BIN_EXE_mock_rust_analyzer")?;
     Ok(WorkspaceSessionBuilder::new(program, workspace_root).spawn()?)
 }

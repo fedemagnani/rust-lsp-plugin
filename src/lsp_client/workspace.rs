@@ -2,7 +2,7 @@
 
 use super::rust_analyzer as ra;
 use super::session::{Session, SessionBuilder, SessionError, SessionEvent};
-use super::{
+use lsp_types::{
     ClientCapabilities, ClientInfo, CompletionContext, CompletionParams, CompletionResponse,
     DidChangeTextDocumentParams, DidChangeWatchedFilesParams, DidCloseTextDocumentParams,
     DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentSymbolParams,
@@ -496,7 +496,7 @@ impl WorkspaceSession {
         path: impl AsRef<Path>,
         position: Position,
         include_declaration: bool,
-    ) -> Result<Option<Vec<super::Location>>, WorkspaceSessionError> {
+    ) -> Result<Option<Vec<lsp_types::Location>>, WorkspaceSessionError> {
         self.typed_request(
             "textDocument/references",
             ReferenceParams {
@@ -565,7 +565,7 @@ impl WorkspaceSession {
         &self,
         query: impl Into<String>,
     ) -> Result<Option<WorkspaceSymbolResponse>, WorkspaceSessionError> {
-        self.request_typed::<super::request::WorkspaceSymbolRequest>(WorkspaceSymbolParams {
+        self.request_typed::<lsp_types::request::WorkspaceSymbolRequest>(WorkspaceSymbolParams {
             query: query.into(),
             work_done_progress_params: Default::default(),
             partial_result_params: Default::default(),

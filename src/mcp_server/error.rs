@@ -1,6 +1,6 @@
 //! Stable MCP-facing error taxonomy for rust-analyzer-backed tools.
 
-use crate::{SessionError, WorkspaceSessionError, WorkspaceSessionPhase};
+use crate::lsp_client::{SessionError, WorkspaceSessionError, WorkspaceSessionPhase};
 use rmcp::{ErrorData, model::ErrorCode};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

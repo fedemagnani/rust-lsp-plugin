@@ -1,6 +1,7 @@
 #![allow(missing_docs)]
 
-use rust_lsp_mcp::{ServerErrorKind, RustAnalyzerMcpServer, WorkspaceSessionConfig, WorkspaceSessionPhase};
+use rust_lsp_mcp::lsp_client::WorkspaceSessionPhase;
+use rust_lsp_mcp::mcp_server::{RustAnalyzerMcpServer, ServerErrorKind, WorkspaceSessionConfig};
 use serde_json::json;
 use std::error::Error;
 use std::fs;
@@ -71,7 +72,7 @@ fn workspace_session_returns_structured_errors_for_invalid_roots() -> Result<(),
 
     let relative_error = server
         .state()
-        .with_workspace_session(PathBuf::from("relative/root"), "request", |_session| -> Result<(), rust_lsp_mcp::WorkspaceSessionError> {
+        .with_workspace_session(PathBuf::from("relative/root"), "request", |_session| -> Result<(), rust_lsp_mcp::lsp_client::WorkspaceSessionError> {
             unreachable!("relative roots should fail before routing")
         })
         .expect_err("relative root should be rejected");
@@ -80,7 +81,7 @@ fn workspace_session_returns_structured_errors_for_invalid_roots() -> Result<(),
     let nonexistent = PathBuf::from("/tmp/rust-lsp-mcp-nonexistent-root-that-does-not-exist");
     let nonexistent_error = server
         .state()
-        .with_workspace_session(&nonexistent, "request", |_session| -> Result<(), rust_lsp_mcp::WorkspaceSessionError> {
+        .with_workspace_session(&nonexistent, "request", |_session| -> Result<(), rust_lsp_mcp::lsp_client::WorkspaceSessionError> {
             unreachable!("nonexistent roots should fail before routing")
         })
         .expect_err("nonexistent root should be rejected");

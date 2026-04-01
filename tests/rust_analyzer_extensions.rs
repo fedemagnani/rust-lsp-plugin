@@ -1,5 +1,6 @@
-use rust_lsp_mcp::{
-    ExpandMacro, ExpandedMacro, FetchDependencyListResult, Position, RunnableArgs, RunnableKind,
+use lsp_types::Position;
+use rust_lsp_mcp::lsp_client::{
+    ExpandMacro, ExpandedMacro, FetchDependencyListResult, RunnableArgs, RunnableKind,
     WorkspaceSessionBuilder,
 };
 use serde_json::json;
@@ -69,8 +70,8 @@ fn exposes_typed_rust_analyzer_extension_requests() -> Result<(), Box<dyn Error>
     assert_eq!(state["rebuild_proc_macro_requests"], 1);
 
     let direct_expand: Option<ExpandedMacro> =
-        session.request_typed::<ExpandMacro>(rust_lsp_mcp::ExpandMacroParams {
-            text_document: rust_lsp_mcp::TextDocumentIdentifier::new(
+        session.request_typed::<ExpandMacro>(rust_lsp_mcp::lsp_client::ExpandMacroParams {
+            text_document: lsp_types::TextDocumentIdentifier::new(
                 session.workspace_uri().parse()?,
             ),
             position,
@@ -84,7 +85,7 @@ fn exposes_typed_rust_analyzer_extension_requests() -> Result<(), Box<dyn Error>
 
 fn spawn_workspace_session(
     workspace_root: &Path,
-) -> Result<rust_lsp_mcp::WorkspaceSession, Box<dyn Error>> {
+) -> Result<rust_lsp_mcp::lsp_client::WorkspaceSession, Box<dyn Error>> {
     let program = std::env::var("CARGO_BIN_EXE_mock_rust_analyzer")?;
     Ok(WorkspaceSessionBuilder::new(program, workspace_root).spawn()?)
 }
