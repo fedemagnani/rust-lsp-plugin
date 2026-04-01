@@ -605,9 +605,9 @@ impl WorkspaceSession {
     /// Performs `rust-analyzer/reloadWorkspace` and resets the loading state so that
     /// subsequent progress events are tracked for the new loading cycle.
     pub fn reload_workspace(&mut self) -> Result<(), WorkspaceSessionError> {
-        let result = self.request_typed::<ra::ReloadWorkspace>(());
+        self.request_typed::<ra::ReloadWorkspace>(())?;
         self.reset_loading_state();
-        result
+        Ok(())
     }
 
     /// Performs `rust-analyzer/rebuildProcMacros` and resets the loading state so that
