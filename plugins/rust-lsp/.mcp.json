@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "rust-lsp": {
+      "command": "rust-lsp-plugin",
+      "args": [],
+      "note": "Requires the `rust-lsp-plugin` binary on PATH and `rust-analyzer` installed via `rustup component add rust-analyzer`."
+    }
+  }
+}

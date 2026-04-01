@@ -1,0 +1,40 @@
+{
+  "name": "rust-lsp",
+  "version": "0.1.0",
+  "description": "Expose rust-analyzer over MCP for semantic Rust navigation and editing workflows.",
+  "author": {
+    "name": "fedemagnani",
+    "email": "0xdrun@gmail.com",
+    "url": "https://github.com/fedemagnani"
+  },
+  "homepage": "https://github.com/fedemagnani/rust-lsp-plugin",
+  "repository": "https://github.com/fedemagnani/rust-lsp-plugin",
+  "keywords": [
+    "rust",
+    "rust-analyzer",
+    "lsp",
+    "mcp",
+    "coding"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Rust LSP MCP",
+    "shortDescription": "Rust Analyzer tools for semantic code navigation",
+    "longDescription": "Add rust-analyzer backed MCP tools and a bundled skill so Codex can inspect Rust workspaces semantically, resolve definitions and references, inspect inferred types, and apply safe rename workflows.",
+    "developerName": "fedemagnani",
+    "category": "Coding",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/fedemagnani/rust-lsp-plugin",
+    "defaultPrompt": [
+      "Use rust-analyzer to find the definition and references of this Rust symbol.",
+      "Inspect the inferred type at this cursor position in my Rust workspace.",
+      "Rename this Rust symbol safely across the workspace."
+    ],
+    "brandColor": "#B7410E",
+    "screenshots": []
+  }
+}
