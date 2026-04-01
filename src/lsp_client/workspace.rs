@@ -875,6 +875,37 @@ impl WorkspaceSession {
         Ok(())
     }
 
+    /// Drains progress events until the workspace loading state reaches `Ready` or the timeout
+    /// elapses. Returns `true` if the workspace finished loading, `false` on timeout.
+    pub fn wait_until_loaded(&mut self, timeout: Duration) -> bool {
+        if self.loading_state == WorkspaceLoadingState::Ready {
+            return true;
+        }
+
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return self.loading_state == WorkspaceLoadingState::Ready;
+            }
+
+            match self.recv_event_with_timeout(remaining) {
+                Ok(Some(event)) => {
+                    self.capture_event(event);
+                    if self.loading_state == WorkspaceLoadingState::Ready {
+                        return true;
+                    }
+                }
+                Ok(None) => {
+                    return self.loading_state == WorkspaceLoadingState::Ready;
+                }
+                Err(_) => {
+                    return false;
+                }
+            }
+        }
+    }
+
     /// Returns the next buffered event or waits up to the provided timeout for a new one.
     pub fn next_event(
         &mut self,
