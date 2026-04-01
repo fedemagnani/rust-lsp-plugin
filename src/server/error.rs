@@ -19,8 +19,6 @@ const CAPABILITY_UNSUPPORTED_CODE: ErrorCode = ErrorCode(-32004);
 pub enum ServerErrorKind {
     /// The caller supplied invalid or incomplete input.
     InvalidInput,
-    /// The requested workspace root is unknown to the server.
-    WorkspaceNotFound,
     /// The requested document is missing or not synchronized.
     DocumentNotAvailable,
     /// The underlying rust-analyzer workspace is not yet ready.
@@ -41,7 +39,7 @@ impl ServerErrorKind {
     fn error_code(self) -> ErrorCode {
         match self {
             Self::InvalidInput => ErrorCode::INVALID_PARAMS,
-            Self::WorkspaceNotFound | Self::DocumentNotAvailable => ErrorCode::RESOURCE_NOT_FOUND,
+            Self::DocumentNotAvailable => ErrorCode::RESOURCE_NOT_FOUND,
             Self::NotReady => ErrorCode::INVALID_REQUEST,
             Self::Cancelled => REQUEST_CANCELLED_CODE,
             Self::Timeout => REQUEST_TIMEOUT_CODE,
@@ -110,15 +108,6 @@ impl ServerError {
     /// Convenience constructor for invalid input errors.
     pub fn invalid_input(message: impl Into<String>) -> Self {
         Self::new(ServerErrorKind::InvalidInput, message)
-    }
-
-    /// Convenience constructor for unknown workspace roots.
-    pub fn workspace_not_found(root: impl AsRef<Path>) -> Self {
-        Self::new(
-            ServerErrorKind::WorkspaceNotFound,
-            format!("workspace root is not registered: {}", root.as_ref().display()),
-        )
-        .with_details(json!({ "workspace_root": root.as_ref() }))
     }
 
     /// Convenience constructor for missing documents.

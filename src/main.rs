@@ -5,22 +5,41 @@ use rust_lsp_mcp::{RustAnalyzerMcpServer, WorkspaceSessionConfig};
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> rust_lsp_mcp::ServerResult<()> {
     let server = RustAnalyzerMcpServer::new();
-    configure_from_env(&server)?;
+
+    let program = resolve_rust_analyzer();
+
+    server
+        .state()
+        .set_workspace_session_config(WorkspaceSessionConfig::new(program));
+
     server.serve_stdio().await
 }
 
-fn configure_from_env(server: &RustAnalyzerMcpServer) -> rust_lsp_mcp::ServerResult<()> {
-    if let Some(program) = std::env::var_os("RUST_LSP_MCP_RUST_ANALYZER_BIN") {
-        server
-            .state()
-            .set_workspace_session_config(WorkspaceSessionConfig::new(program));
+/// Resolves the rust-analyzer binary.
+///
+/// In normal use, the server expects `rust-analyzer` to be on PATH. Tests can
+/// override this by setting `__RUST_LSP_MCP_TEST_BIN` to a mock binary path.
+fn resolve_rust_analyzer() -> std::ffi::OsString {
+    if let Some(test_bin) = std::env::var_os("__RUST_LSP_MCP_TEST_BIN") {
+        return test_bin;
     }
 
-    if let Some(roots) = std::env::var_os("RUST_LSP_MCP_WORKSPACE_ROOTS") {
-        for root in std::env::split_paths(&roots) {
-            server.state().insert_workspace_root(root)?;
-        }
+    if which("rust-analyzer").is_none() {
+        eprintln!(
+            "error: `rust-analyzer` not found in PATH. Install it with:\n\n  \
+             rustup component add rust-analyzer\n"
+        );
+        std::process::exit(1);
     }
 
-    Ok(())
+    "rust-analyzer".into()
+}
+
+fn which(binary: &str) -> Option<std::path::PathBuf> {
+    std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths).find_map(|dir| {
+            let candidate = dir.join(binary);
+            candidate.is_file().then_some(candidate)
+        })
+    })
 }

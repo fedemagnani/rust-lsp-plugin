@@ -34,14 +34,15 @@ Use the MCP tools when you need to:
 - The task is not Rust-specific (config files, markdown, CI scripts)
 - You need to search for string literals, comments, or non-symbol text patterns
 - You need the raw file contents for editing or context beyond what hover provides
-- The workspace root is not registered with the MCP server
 - You need to search across files that are not part of the Rust compilation (e.g. build scripts
   that rust-analyzer does not index)
 
 ## Workspace and document model
 
-Every tool call requires a `workspace_root` parameter: the absolute path to the registered
-workspace root. This routes the call to the correct rust-analyzer session.
+Every tool call requires a `workspace_root` parameter: the absolute path to the workspace root
+of the Rust project being analyzed. The server manages a single rust-analyzer session at a time.
+If a tool call targets a different workspace root, the previous session is automatically shut
+down and replaced.
 
 Position-based tools (hover, definitions, references, rename) also require a `document_path` and
 a zero-based `position` with `line` and `character` fields.
