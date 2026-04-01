@@ -946,6 +946,13 @@ impl WorkspaceSession {
                     }
                 }
                 Ok(None) => {
+                    // If we timed out without ever receiving a progress event, assume
+                    // the server completed without progress tracking (e.g. reload with
+                    // no workDoneProgress/create). Treat as ready rather than leaving
+                    // loading_state stuck at NotStarted.
+                    if self.loading_state == WorkspaceLoadingState::NotStarted {
+                        self.loading_state = WorkspaceLoadingState::Ready;
+                    }
                     return self.loading_state == WorkspaceLoadingState::Ready;
                 }
                 Err(_) => {
