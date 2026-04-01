@@ -597,7 +597,7 @@ fn normalize_text_edit(edit: TextEdit) -> TextEditSummary {
 impl RustAnalyzerMcpServer {
     #[tool(
         name = "hover",
-        description = "Inspect hover information for a symbol in a workspace document.",
+        description = "Inspect hover information for a symbol in a workspace document. Works on saved files without open_document; use open_document only to analyze unsaved or in-memory content.",
         annotations(
             title = "Hover",
             read_only_hint = true,
@@ -628,7 +628,7 @@ impl RustAnalyzerMcpServer {
 
     #[tool(
         name = "definitions",
-        description = "Resolve definition locations for a symbol in a workspace document.",
+        description = "Resolve definition locations for a symbol in a workspace document. Works on saved files without open_document; use open_document only to analyze unsaved or in-memory content.",
         annotations(
             title = "Definitions",
             read_only_hint = true,
@@ -659,7 +659,7 @@ impl RustAnalyzerMcpServer {
 
     #[tool(
         name = "references",
-        description = "List references for a symbol in a workspace document.",
+        description = "List references for a symbol in a workspace document. Works on saved files without open_document; use open_document only to analyze unsaved or in-memory content.",
         annotations(
             title = "References",
             read_only_hint = true,
@@ -784,7 +784,7 @@ impl RustAnalyzerMcpServer {
 
     #[tool(
         name = "open_document",
-        description = "Open a document and synchronize its contents with the workspace rust-analyzer session. The document must be opened before position-based tools can operate on it.",
+        description = "Open a document and synchronize its contents with the workspace rust-analyzer session. Only required to analyze unsaved or in-memory content; position-based tools already work on saved files without this call.",
         annotations(
             title = "Open Document",
             read_only_hint = false,
@@ -857,13 +857,53 @@ impl RustAnalyzerMcpServer {
     }
 
     #[tool(
+        name = "replace_document",
+        description = "Replace the full contents of an already-open document. The version is auto-incremented internally.",
+        annotations(
+            title = "Replace Document",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn replace_document(
+        &self,
+        params: Parameters<ReplaceDocumentInput>,
+    ) -> Result<Json<MutatingToolResult<ChangeDocumentSummary>>, ErrorData> {
+        let params = params.0;
+        let workspace_root = params.workspace_root;
+        let document_path = params.document_path;
+        let text = params.text;
+        let result = self
+            .with_workspace_session_blocking(
+                workspace_root,
+                "replace_document",
+                move |session| {
+                    let tracked = session.replace_document(&document_path, text)?;
+                    Ok(ChangeDocumentSummary {
+                        document_path: tracked.path.clone(),
+                        version: tracked.version(),
+                    })
+                },
+            )
+            .await?;
+
+        Ok(Json(MutatingToolResult {
+            data: result,
+            execution: Default::default(),
+            workspace_edit: None,
+        }))
+    }
+
+    #[tool(
         name = "close_document",
-        description = "Stop synchronizing an open document with the workspace rust-analyzer session and release its tracked state.",
+        description = "Stop synchronizing an open document with the workspace rust-analyzer session and release its tracked state. Idempotent: closing an already-closed document succeeds with already_closed set to true.",
         annotations(
             title = "Close Document",
             read_only_hint = false,
             destructive_hint = false,
-            idempotent_hint = false,
+            idempotent_hint = true,
             open_world_hint = false
         )
     )]
@@ -876,11 +916,20 @@ impl RustAnalyzerMcpServer {
         let document_path = params.document_path;
         let result = self
             .with_workspace_session_blocking(workspace_root, "close_document", move |session| {
-                let tracked = session.close_document(&document_path)?;
-                Ok(CloseDocumentSummary {
+            match session.close_document(&document_path) {
+                Ok(tracked) => Ok(CloseDocumentSummary {
                     document_path: tracked.path,
-                })
-            })
+                    already_closed: false,
+                }),
+                Err(WorkspaceSessionError::DocumentNotOpen { path }) => {
+                    Ok(CloseDocumentSummary {
+                        document_path: path,
+                        already_closed: true,
+                    })
+                }
+                Err(error) => Err(error),
+            }
+        })
             .await?;
 
         Ok(Json(MutatingToolResult {
