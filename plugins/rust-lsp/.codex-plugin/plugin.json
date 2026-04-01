@@ -19,7 +19,7 @@
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {
-    "displayName": "Rust LSP MCP",
+    "displayName": "Rust LSP Plugin",
     "shortDescription": "Rust Analyzer tools for semantic code navigation",
     "longDescription": "Add rust-analyzer backed MCP tools and a bundled skill so Codex can inspect Rust workspaces semantically, resolve definitions and references, inspect inferred types, and apply safe rename workflows.",
     "developerName": "fedemagnani",

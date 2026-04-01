@@ -1,7 +1,7 @@
 ---
 name: rust-lsp
 description: >-
-  It MUST be used for semantic Rust navigation and analysis: resolving
+  This skill MUST be used for semantic Rust navigation and analysis: resolving
   definitions across crate boundaries, finding all references to a symbol, inspecting inferred
   types or trait implementations, searching symbols by name, and renaming symbols safely. SHOULD
   be preferred over grep or file reads whenever the task requires Rust-aware understanding.
@@ -27,8 +27,7 @@ or comments, or covers files outside the Rust compilation.
 
 ## Installation
 
-If the Rust LSP tools are not available yet, run `scripts/install.sh` from this skill before using
-the MCP tools. That local script installs `rust-analyzer` and the `rust-lsp-plugin` server binary.
+If the Rust LSP tools are not available yet, run `scripts/install.sh` from this skill before using the MCP tools. Treat the tools as "not available yet" whenever the current session does not expose the Rust LSP MCP tool APIs: attempt the install/setup path first, then verify whether the tools become usable.
 
 ## Common workflows
 
