@@ -1,7 +1,7 @@
 #![allow(missing_docs)]
 
 use lsp_server::{Request, RequestId};
-use rust_lsp_mcp::lsp_client::{Session, SessionBuilder, SessionEvent};
+use rust_lsp_plugin::lsp_client::{Session, SessionBuilder, SessionEvent};
 use serde_json::json;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
@@ -138,7 +138,7 @@ fn shutdown_failure_keeps_drop_cleanup_enabled() {
     let _ = session.take_event_receiver().expect("take event receiver");
 
     let error = session.shutdown().expect_err("shutdown should fail");
-    assert!(matches!(error, rust_lsp_mcp::lsp_client::SessionError::Disconnected));
+    assert!(matches!(error, rust_lsp_plugin::lsp_client::SessionError::Disconnected));
 }
 
 #[test]
@@ -151,7 +151,7 @@ fn session_request_timeout_fails_instead_of_hanging() {
         .expect_err("slow request should time out");
     assert!(matches!(
         error,
-        rust_lsp_mcp::lsp_client::SessionError::RequestTimeout { method, .. } if method == "slow_ping"
+        rust_lsp_plugin::lsp_client::SessionError::RequestTimeout { method, .. } if method == "slow_ping"
     ));
 }
 
@@ -165,7 +165,7 @@ fn session_shutdown_times_out_for_hung_exit() {
 
     assert!(matches!(
         error,
-        rust_lsp_mcp::lsp_client::SessionError::ProcessExitTimeout { timeout }
+        rust_lsp_plugin::lsp_client::SessionError::ProcessExitTimeout { timeout }
             if timeout == Duration::from_millis(50)
     ));
     assert!(start.elapsed() < Duration::from_secs(1));

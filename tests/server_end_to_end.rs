@@ -100,7 +100,8 @@ fn mcp_server_switches_workspace_when_root_changes() -> Result<(), Box<dyn Error
 #[test]
 fn mcp_server_returns_structured_error_for_nonexistent_workspace() -> Result<(), Box<dyn Error>> {
     let workspace = create_temp_workspace("e2e-error-known");
-    let nonexistent = PathBuf::from("/tmp/rust-lsp-mcp-nonexistent-workspace-that-does-not-exist");
+    let nonexistent =
+        PathBuf::from("/tmp/rust-lsp-plugin-nonexistent-workspace-that-does-not-exist");
     let file = workspace.join("src").join("lib.rs");
     fs::create_dir_all(file.parent().unwrap())?;
     fs::write(&file, "pub fn x() {}\n")?;
@@ -385,10 +386,10 @@ fn call_tool(
 }
 
 fn spawn_server(_workspace_root: &Path) -> Result<Child, io::Error> {
-    let binary = env!("CARGO_BIN_EXE_rust-lsp-mcp");
+    let binary = env!("CARGO_BIN_EXE_rust-lsp-plugin");
     let analyzer = env!("CARGO_BIN_EXE_mock_rust_analyzer");
     Command::new(binary)
-        .env("__RUST_LSP_MCP_TEST_BIN", analyzer)
+        .env("__rust_lsp_plugin_TEST_BIN", analyzer)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -434,7 +435,7 @@ fn create_temp_workspace(label: &str) -> PathBuf {
         .expect("time went backwards")
         .as_nanos();
     let path = std::env::temp_dir().join(format!(
-        "rust-lsp-mcp-{label}-{}-{unique}",
+        "rust-lsp-plugin-{label}-{}-{unique}",
         std::process::id()
     ));
     fs::create_dir_all(&path).expect("create temp workspace");

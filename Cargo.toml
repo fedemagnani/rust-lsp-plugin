@@ -1,9 +1,9 @@
 [package]
-name = "rust-lsp-mcp"
+name = "rust-lsp-plugin"
 edition = "2024"
 
 [[bin]]
-name = "rust-lsp-mcp"
+name = "rust-lsp-plugin"
 path = "src/main.rs"
 
 [[bin]]

@@ -1,7 +1,7 @@
 #![allow(missing_docs)]
 
-use rust_lsp_mcp::lsp_client::WorkspaceSessionPhase;
-use rust_lsp_mcp::mcp_server::{RustAnalyzerMcpServer, ServerErrorKind, WorkspaceSessionConfig};
+use rust_lsp_plugin::lsp_client::WorkspaceSessionPhase;
+use rust_lsp_plugin::mcp_server::{RustAnalyzerMcpServer, ServerErrorKind, WorkspaceSessionConfig};
 use serde_json::json;
 use std::error::Error;
 use std::fs;
@@ -72,16 +72,16 @@ fn workspace_session_returns_structured_errors_for_invalid_roots() -> Result<(),
 
     let relative_error = server
         .state()
-        .with_workspace_session(PathBuf::from("relative/root"), "request", |_session| -> Result<(), rust_lsp_mcp::lsp_client::WorkspaceSessionError> {
+        .with_workspace_session(PathBuf::from("relative/root"), "request", |_session| -> Result<(), rust_lsp_plugin::lsp_client::WorkspaceSessionError> {
             unreachable!("relative roots should fail before routing")
         })
         .expect_err("relative root should be rejected");
     assert_eq!(relative_error.kind, ServerErrorKind::InvalidInput);
 
-    let nonexistent = PathBuf::from("/tmp/rust-lsp-mcp-nonexistent-root-that-does-not-exist");
+    let nonexistent = PathBuf::from("/tmp/rust-lsp-plugin-nonexistent-root-that-does-not-exist");
     let nonexistent_error = server
         .state()
-        .with_workspace_session(&nonexistent, "request", |_session| -> Result<(), rust_lsp_mcp::lsp_client::WorkspaceSessionError> {
+        .with_workspace_session(&nonexistent, "request", |_session| -> Result<(), rust_lsp_plugin::lsp_client::WorkspaceSessionError> {
             unreachable!("nonexistent roots should fail before routing")
         })
         .expect_err("nonexistent root should be rejected");
@@ -105,7 +105,7 @@ fn create_temp_workspace(label: &str) -> PathBuf {
         .expect("time went backwards")
         .as_nanos();
     let path = std::env::temp_dir().join(format!(
-        "rust-lsp-mcp-{label}-{}-{unique}",
+        "rust-lsp-plugin-{label}-{}-{unique}",
         std::process::id()
     ));
     fs::create_dir_all(&path).expect("create temp workspace");

@@ -9,8 +9,8 @@
 
 This repository should reuse the crates already aligned with the rust-analyzer stack wherever practical:
 
-- use [`lsp-server`](/Users/0xdrun/rust-lsp-mcp/docs/integration/lsp-server.md) for transport framing and message primitives
-- use [`lsp-types`](/Users/0xdrun/rust-lsp-mcp/docs/integration/lsp-types.md) for standard LSP protocol data types
+- use [`lsp-server`](/Users/0xdrun/rust-lsp-plugin/docs/integration/lsp-server.md) for transport framing and message primitives
+- use [`lsp-types`](/Users/0xdrun/rust-lsp-plugin/docs/integration/lsp-types.md) for standard LSP protocol data types
 
 The local code should focus on process ownership, session lifecycle, synchronization, and MCP-oriented normalization rather than reimplementing standard protocol structures.
 

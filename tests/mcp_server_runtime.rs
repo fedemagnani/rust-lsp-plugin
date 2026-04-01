@@ -107,7 +107,7 @@ fn mcp_server_starts_serves_requests_and_exits_when_stdio_closes() -> Result<(),
 }
 
 fn spawn_server() -> Result<Child, io::Error> {
-    let binary = env!("CARGO_BIN_EXE_rust-lsp-mcp");
+    let binary = env!("CARGO_BIN_EXE_rust-lsp-plugin");
     Command::new(binary)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
