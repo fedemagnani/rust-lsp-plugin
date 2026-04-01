@@ -890,6 +890,17 @@ impl WorkspaceSession {
             }
 
             match self.recv_event_with_timeout(remaining) {
+                Ok(Some(SessionEvent::ServerRequest(request)))
+                    if request.method == "workspace/configuration" =>
+                {
+                    let response = configuration_response(
+                        &self.workspace_configuration,
+                        Some(&request.params),
+                    );
+                    if self.session.respond(request.id, response).is_err() {
+                        return false;
+                    }
+                }
                 Ok(Some(event)) => {
                     self.capture_event(event);
                     if self.loading_state == WorkspaceLoadingState::Ready {
