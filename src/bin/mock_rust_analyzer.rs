@@ -514,6 +514,7 @@ fn main() -> io::Result<()> {
                             "token": "rustAnalyzer/workspace",
                             "value": {
                                 "kind": "begin",
+                                "title": "Indexing",
                                 "message": "Loading workspace"
                             }
                         }
