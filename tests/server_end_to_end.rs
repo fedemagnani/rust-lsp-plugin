@@ -298,6 +298,7 @@ fn mcp_server_exercises_stateful_tool_flows() -> Result<(), Box<dyn Error>> {
     let stateful_names = [
         "open_document",
         "change_document",
+        "replace_document",
         "close_document",
         "rename_symbol",
         "reload_workspace",

@@ -761,6 +761,42 @@ impl WorkspaceSession {
         Ok(tracked)
     }
 
+    /// Replaces the full contents of an open document, auto-incrementing the version.
+    pub fn replace_document(
+        &mut self,
+        path: impl AsRef<Path>,
+        text: impl Into<String>,
+    ) -> Result<&TrackedDocument, WorkspaceSessionError> {
+        self.ensure_ready("replace_document")?;
+
+        let path = absolutize_path(path.as_ref().to_path_buf())?;
+        let tracked = self
+            .open_documents
+            .get_mut(&path)
+            .ok_or_else(|| WorkspaceSessionError::DocumentNotOpen { path: path.clone() })?;
+
+        let next_version = tracked.version() + 1;
+        let text = text.into();
+        self.session.notify(
+            "textDocument/didChange",
+            DidChangeTextDocumentParams {
+                text_document: VersionedTextDocumentIdentifier::new(
+                    tracked.text_document.uri.clone(),
+                    next_version,
+                ),
+                content_changes: vec![TextDocumentContentChangeEvent {
+                    range: None,
+                    range_length: None,
+                    text: text.clone(),
+                }],
+            },
+        )?;
+
+        tracked.text_document.version = next_version;
+        tracked.text_document.text = text;
+        Ok(tracked)
+    }
+
     /// Notifies the server that an open document was saved.
     pub fn save_document(
         &mut self,

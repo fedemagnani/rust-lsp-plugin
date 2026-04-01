@@ -75,12 +75,90 @@ pub struct AnalyzerStatusInput {
 }
 
 /// Zero-based text position.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+///
+/// Accepts either `{"line": 21, "character": 5}` or `"21:5"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct TextPosition {
     /// Zero-based line number.
     pub line: u32,
     /// Zero-based UTF-8 character offset on the line.
     pub character: u32,
+}
+
+impl JsonSchema for TextPosition {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "TextPosition".into()
+    }
+
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        concat!(module_path!(), "::TextPosition").into()
+    }
+
+    fn json_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "oneOf": [
+                {
+                    "type": "object",
+                    "description": "Zero-based text position as an object.",
+                    "properties": {
+                        "line": { "type": "integer", "minimum": 0, "description": "Zero-based line number." },
+                        "character": { "type": "integer", "minimum": 0, "description": "Zero-based UTF-8 character offset on the line." }
+                    },
+                    "required": ["line", "character"],
+                    "additionalProperties": false
+                },
+                {
+                    "type": "string",
+                    "description": "Zero-based text position as \"line:character\".",
+                    "pattern": "^\\d+:\\d+$"
+                }
+            ]
+        })
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for TextPosition {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de;
+
+        struct Visitor;
+
+        impl<'de> de::Visitor<'de> for Visitor {
+            type Value = TextPosition;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str(r#"{"line": N, "character": N} or "line:character""#)
+            }
+
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<TextPosition, E> {
+                let (l, c) = v
+                    .split_once(':')
+                    .ok_or_else(|| de::Error::custom("expected \"line:character\""))?;
+                Ok(TextPosition {
+                    line: l.trim().parse().map_err(de::Error::custom)?,
+                    character: c.trim().parse().map_err(de::Error::custom)?,
+                })
+            }
+
+            fn visit_map<A: de::MapAccess<'de>>(self, map: A) -> Result<TextPosition, A::Error> {
+                #[derive(Deserialize)]
+                struct Obj {
+                    line: u32,
+                    character: u32,
+                }
+                let obj = Obj::deserialize(de::value::MapAccessDeserializer::new(map))?;
+                Ok(TextPosition {
+                    line: obj.line,
+                    character: obj.character,
+                })
+            }
+        }
+
+        deserializer.deserialize_any(Visitor)
+    }
 }
 
 /// Zero-based text range.
@@ -341,11 +419,24 @@ pub struct ChangeDocumentSummary {
     pub version: i32,
 }
 
+/// Input for replacing the full contents of an already-open document with auto-incremented version.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ReplaceDocumentInput {
+    /// Absolute path to the workspace root managed by the server.
+    pub workspace_root: PathBuf,
+    /// Absolute path to the open document.
+    pub document_path: PathBuf,
+    /// Replacement full text of the document.
+    pub text: String,
+}
+
 /// Summary returned after a document is closed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct CloseDocumentSummary {
     /// Absolute path to the closed document.
     pub document_path: PathBuf,
+    /// True when the document was not open at the time of the call.
+    pub already_closed: bool,
 }
 
 /// Summary returned after a rename operation completes.
