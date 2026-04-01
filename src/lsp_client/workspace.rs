@@ -23,6 +23,9 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Duration;
 
 const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(1);
+/// Grace period after all progress tokens end before declaring the workspace truly ready.
+/// Bridges gaps between sequential rust-analyzer loading phases (e.g. Fetching → Indexing).
+const LOADING_PHASE_GRACE: Duration = Duration::from_secs(3);
 
 /// High-level session phase for the LSP initialization lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -912,7 +915,13 @@ impl WorkspaceSession {
                         return false;
                     }
                     if self.loading_state == WorkspaceLoadingState::Ready {
-                        return true;
+                        // Don't return immediately — rust-analyzer emits sequential
+                        // phases that may not overlap. Wait a short grace period for
+                        // the next phase to begin before declaring truly ready.
+                        if self.wait_for_next_phase(deadline) {
+                            return true;
+                        }
+                        // A new phase started; continue the main loop.
                     }
                 }
                 Ok(None) => {
@@ -945,6 +954,34 @@ impl WorkspaceSession {
             other => {
                 self.capture_event(other);
                 true
+            }
+        }
+    }
+
+    /// Waits briefly after `active_progress` empties to see if a new loading phase begins.
+    /// Returns `true` if no new phase started (workspace is truly ready), `false` if a new
+    /// phase began and the caller should continue the main wait loop.
+    fn wait_for_next_phase(&mut self, overall_deadline: std::time::Instant) -> bool {
+        let grace_deadline = std::time::Instant::now() + LOADING_PHASE_GRACE;
+        let deadline = grace_deadline.min(overall_deadline);
+
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return self.loading_state == WorkspaceLoadingState::Ready;
+            }
+
+            match self.recv_event_with_timeout(remaining) {
+                Ok(Some(event)) => {
+                    if !self.handle_loading_event(event) {
+                        return true; // transport error; report current state as final
+                    }
+                    if self.loading_state != WorkspaceLoadingState::Ready {
+                        return false; // new phase started
+                    }
+                }
+                Ok(None) => return true, // grace period elapsed, truly ready
+                Err(_) => return true,
             }
         }
     }
