@@ -1,7 +1,7 @@
 ---
-name: rust-lsp-mcp
+name: rust-lsp
 description: >-
-  Rust Analyzer Agent Skill. MUST be used for semantic Rust navigation and analysis: resolving
+  It MUST be used for semantic Rust navigation and analysis: resolving
   definitions across crate boundaries, finding all references to a symbol, inspecting inferred
   types or trait implementations, searching symbols by name, and renaming symbols safely. SHOULD
   be preferred over grep or file reads whenever the task requires Rust-aware understanding.
@@ -24,6 +24,11 @@ semantic understanding (scoping, imports, trait dispatch, macro expansion).
 
 **Fall back to grep or file reads** when the task is not Rust-specific, targets string literals
 or comments, or covers files outside the Rust compilation.
+
+## Installation
+
+If the Rust LSP tools are not available yet, run `scripts/install.sh` from this skill before using
+the MCP tools. That local script installs `rust-analyzer` and the `rust-lsp-plugin` server binary.
 
 ## Common workflows
 

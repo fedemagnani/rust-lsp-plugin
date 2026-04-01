@@ -1,6 +1,6 @@
 #![allow(missing_docs)]
 
-use rust_lsp_mcp::mcp_server::{RustAnalyzerMcpServer, ServerResult, WorkspaceSessionConfig};
+use rust_lsp_plugin::mcp_server::{RustAnalyzerMcpServer, ServerResult, WorkspaceSessionConfig};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ServerResult<()> {
@@ -18,9 +18,9 @@ async fn main() -> ServerResult<()> {
 /// Resolves the rust-analyzer binary.
 ///
 /// In normal use, the server expects `rust-analyzer` to be on PATH. Tests can
-/// override this by setting `__RUST_LSP_MCP_TEST_BIN` to a mock binary path.
+/// override this by setting `__RUST_LSP_PLUGIN_TEST_BIN` to a mock binary path.
 fn resolve_rust_analyzer() -> std::ffi::OsString {
-    if let Some(test_bin) = std::env::var_os("__RUST_LSP_MCP_TEST_BIN") {
+    if let Some(test_bin) = std::env::var_os("__RUST_LSP_PLUGIN_TEST_BIN") {
         return test_bin;
     }
 

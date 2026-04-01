@@ -1,8 +1,8 @@
 #![allow(missing_docs)]
 
 use rmcp::model::ErrorCode;
-use rust_lsp_mcp::lsp_client::{SessionError, WorkspaceSessionError};
-use rust_lsp_mcp::mcp_server::{
+use rust_lsp_plugin::lsp_client::{SessionError, WorkspaceSessionError};
+use rust_lsp_plugin::mcp_server::{
     AnalyzerStatusInput, CancellationSummary, DocumentLocation, HoverContent, HoverSummary,
     MutatingToolResult, ReadOnlyToolResult, RenameSymbolInput, ServerError, ServerErrorKind,
     TextEditSummary, TextPosition, TextRange, ToolExecutionSummary, ToolProgressPhase,
@@ -137,14 +137,14 @@ fn server_error_maps_session_and_workspace_failures_into_stable_taxonomy() {
 
     let invalid_phase = ServerError::from(WorkspaceSessionError::InvalidPhase {
         operation: "open_document",
-        phase: rust_lsp_mcp::lsp_client::WorkspaceSessionPhase::PreInitialize,
+        phase: rust_lsp_plugin::lsp_client::WorkspaceSessionPhase::PreInitialize,
     });
     assert_eq!(invalid_phase.kind, ServerErrorKind::NotReady);
     assert!(invalid_phase.retriable);
 
     let failed_phase = ServerError::from(WorkspaceSessionError::InvalidPhase {
         operation: "open_document",
-        phase: rust_lsp_mcp::lsp_client::WorkspaceSessionPhase::Failed,
+        phase: rust_lsp_plugin::lsp_client::WorkspaceSessionPhase::Failed,
     });
     assert_eq!(failed_phase.kind, ServerErrorKind::Internal);
     assert!(!failed_phase.retriable);

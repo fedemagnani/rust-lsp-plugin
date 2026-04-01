@@ -253,10 +253,10 @@ fn call_tool(
 }
 
 fn spawn_server(_workspace_root: &Path) -> Result<Child, io::Error> {
-    let binary = env!("CARGO_BIN_EXE_rust-lsp-mcp");
+    let binary = env!("CARGO_BIN_EXE_rust-lsp-plugin");
     let analyzer = env!("CARGO_BIN_EXE_mock_rust_analyzer");
     Command::new(binary)
-        .env("__RUST_LSP_MCP_TEST_BIN", analyzer)
+        .env("__RUST_LSP_PLUGIN_TEST_BIN", analyzer)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -305,7 +305,7 @@ fn create_temp_workspace(label: &str) -> PathBuf {
         .expect("time went backwards")
         .as_nanos();
     let path = std::env::temp_dir().join(format!(
-        "rust-lsp-mcp-{label}-{}-{unique}",
+        "rust-lsp-plugin-{label}-{}-{unique}",
         std::process::id()
     ));
     fs::create_dir_all(&path).expect("create temp workspace");

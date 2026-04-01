@@ -1,5 +1,5 @@
 use lsp_types::{FileChangeType, FileEvent};
-use rust_lsp_mcp::lsp_client::{WorkspaceSessionBuilder, WorkspaceSessionError};
+use rust_lsp_plugin::lsp_client::{WorkspaceSessionBuilder, WorkspaceSessionError};
 use serde_json::{Value, json};
 use std::error::Error;
 use std::fs;
@@ -226,7 +226,7 @@ fn resolves_symlinked_document_paths_to_the_same_entry() -> Result<(), Box<dyn E
 
 fn spawn_workspace_session(
     workspace_root: &Path,
-) -> Result<rust_lsp_mcp::lsp_client::WorkspaceSession, Box<dyn Error>> {
+) -> Result<rust_lsp_plugin::lsp_client::WorkspaceSession, Box<dyn Error>> {
     let program = std::env::var("CARGO_BIN_EXE_mock_rust_analyzer")?;
     Ok(WorkspaceSessionBuilder::new(program, workspace_root).spawn()?)
 }
@@ -237,7 +237,7 @@ fn create_temp_workspace(label: &str) -> PathBuf {
         .expect("time went backwards")
         .as_nanos();
     let path = std::env::temp_dir().join(format!(
-        "rust-lsp-mcp-{label}-{}-{unique}",
+        "rust-lsp-plugin-{label}-{}-{unique}",
         std::process::id()
     ));
     fs::create_dir_all(&path).expect("create temp workspace");

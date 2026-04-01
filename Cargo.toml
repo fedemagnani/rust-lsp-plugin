@@ -1,10 +1,10 @@
 [package]
-name = "rust-lsp-mcp"
+name = "rust-lsp-plugin"
 edition = "2024"
 
 [[bin]]
-name = "rust-lsp-mcp"
-path = "src/main.rs"
+name = "rust-lsp-plugin"
+path = "src/bin/main.rs"
 
 [[bin]]
 name = "mock_rust_analyzer"
