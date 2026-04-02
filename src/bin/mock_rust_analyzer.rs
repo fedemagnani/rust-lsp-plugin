@@ -301,6 +301,45 @@ fn main() -> io::Result<()> {
                         "result": null
                     }),
                 )?;
+                write_message(
+                    &mut writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "method": "window/workDoneProgress/create",
+                        "id": format!("progress-create-reload-{reload_workspace_requests}"),
+                        "params": {
+                            "token": format!("reload-{reload_workspace_requests}")
+                        }
+                    }),
+                )?;
+                write_message(
+                    &mut writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "method": "$/progress",
+                        "params": {
+                            "token": format!("reload-{reload_workspace_requests}"),
+                            "value": {
+                                "kind": "begin",
+                                "title": "Fetching",
+                                "message": "Reloading workspace"
+                            }
+                        }
+                    }),
+                )?;
+                write_message(
+                    &mut writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "method": "$/progress",
+                        "params": {
+                            "token": format!("reload-{reload_workspace_requests}"),
+                            "value": {
+                                "kind": "end"
+                            }
+                        }
+                    }),
+                )?;
             }
             (Some("rust-analyzer/rebuildProcMacros"), Some(id)) => {
                 rebuild_proc_macro_requests += 1;
@@ -310,6 +349,45 @@ fn main() -> io::Result<()> {
                         "jsonrpc": "2.0",
                         "id": id,
                         "result": null
+                    }),
+                )?;
+                write_message(
+                    &mut writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "method": "window/workDoneProgress/create",
+                        "id": format!("progress-create-rebuild-{rebuild_proc_macro_requests}"),
+                        "params": {
+                            "token": format!("rebuild-{rebuild_proc_macro_requests}")
+                        }
+                    }),
+                )?;
+                write_message(
+                    &mut writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "method": "$/progress",
+                        "params": {
+                            "token": format!("rebuild-{rebuild_proc_macro_requests}"),
+                            "value": {
+                                "kind": "begin",
+                                "title": "Loading proc-macros",
+                                "message": "Rebuilding proc macros"
+                            }
+                        }
+                    }),
+                )?;
+                write_message(
+                    &mut writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "method": "$/progress",
+                        "params": {
+                            "token": format!("rebuild-{rebuild_proc_macro_requests}"),
+                            "value": {
+                                "kind": "end"
+                            }
+                        }
                     }),
                 )?;
             }
@@ -505,6 +583,19 @@ fn main() -> io::Result<()> {
                         }
                     }),
                 )?;
+                // Register the progress token via window/workDoneProgress/create
+                // so the client tracks it in registered_progress_tokens.
+                write_message(
+                    &mut writer,
+                    &json!({
+                        "jsonrpc": "2.0",
+                        "method": "window/workDoneProgress/create",
+                        "id": "progress-create-workspace",
+                        "params": {
+                            "token": "rustAnalyzer/workspace"
+                        }
+                    }),
+                )?;
                 write_message(
                     &mut writer,
                     &json!({
@@ -514,6 +605,7 @@ fn main() -> io::Result<()> {
                             "token": "rustAnalyzer/workspace",
                             "value": {
                                 "kind": "begin",
+                                "title": "Indexing",
                                 "message": "Loading workspace"
                             }
                         }
@@ -620,6 +712,13 @@ fn main() -> io::Result<()> {
             }
             (None, Some(id)) if id == json!("config-1") => {
                 config_response = message.get("result").cloned().unwrap_or(Value::Null);
+            }
+            (None, Some(id))
+                if id
+                    .as_str()
+                    .is_some_and(|s| s.starts_with("progress-create-")) =>
+            {
+                // Response to window/workDoneProgress/create — nothing to store.
             }
             (Some(method), None) => {
                 record_notification(&mut writer, &mut notifications, method)?;

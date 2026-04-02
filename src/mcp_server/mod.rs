@@ -4,7 +4,8 @@ mod error;
 mod schema;
 
 use crate::lsp_client::{
-    WorkspaceSession, WorkspaceSessionBuilder, WorkspaceSessionError, WorkspaceSessionPhase,
+    WorkspaceLoadingState, WorkspaceSession, WorkspaceSessionBuilder, WorkspaceSessionError,
+    WorkspaceSessionPhase,
 };
 use lsp_types::{
     CreateFile, DeleteFile, DocumentChangeOperation, DocumentChanges, GotoDefinitionResponse,
@@ -32,6 +33,8 @@ pub use schema::*;
 pub type ServerResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 const DEFAULT_WORKSPACE_READY_TIMEOUT: Duration = Duration::from_secs(1);
+const DEFAULT_WORKSPACE_LOADING_TIMEOUT: Duration = Duration::from_secs(60);
+const LOADING_RETRY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Configuration used to create per-workspace rust-analyzer sessions on demand.
 #[derive(Debug, Clone)]
@@ -41,6 +44,7 @@ pub struct WorkspaceSessionConfig {
     envs: Vec<(OsString, OsString)>,
     request_timeout: Option<Duration>,
     ready_timeout: Duration,
+    workspace_loading_timeout: Duration,
 }
 
 impl WorkspaceSessionConfig {
@@ -52,6 +56,7 @@ impl WorkspaceSessionConfig {
             envs: Vec::new(),
             request_timeout: None,
             ready_timeout: DEFAULT_WORKSPACE_READY_TIMEOUT,
+            workspace_loading_timeout: DEFAULT_WORKSPACE_LOADING_TIMEOUT,
         }
     }
 
@@ -91,6 +96,13 @@ impl WorkspaceSessionConfig {
         self
     }
 
+    /// Sets the maximum time to wait for rust-analyzer to finish loading the workspace after
+    /// initialization. Defaults to 60 seconds.
+    pub fn workspace_loading_timeout(mut self, timeout: Duration) -> Self {
+        self.workspace_loading_timeout = timeout;
+        self
+    }
+
     fn spawn_initialized(
         &self,
         workspace_root: &Path,
@@ -109,6 +121,7 @@ impl WorkspaceSessionConfig {
 
         let mut session = builder.spawn()?;
         session.initialize()?;
+        session.wait_until_loaded(self.workspace_loading_timeout);
         Ok(session)
     }
 }
@@ -199,6 +212,32 @@ impl ServerState {
         let (_, session) = slot
             .as_mut()
             .expect("workspace session initialized before routing");
+
+        // Give rust-analyzer a short window to catch up — it may have finished loading since the
+        // last check but we haven't drained the progress events yet.
+        if *session.loading_state() != WorkspaceLoadingState::Ready {
+            session.wait_until_loaded(LOADING_RETRY_TIMEOUT);
+        }
+
+        match session.loading_state() {
+            WorkspaceLoadingState::Ready => {}
+            WorkspaceLoadingState::InProgress { message } => {
+                let detail = message
+                    .as_deref()
+                    .unwrap_or("workspace is still being indexed");
+                return Err(ServerError::not_ready(format!(
+                    "rust-analyzer is not ready: {detail}"
+                ))
+                .with_operation(operation));
+            }
+            WorkspaceLoadingState::NotStarted => {
+                return Err(ServerError::not_ready(
+                    "rust-analyzer has not started loading the workspace yet",
+                )
+                .with_operation(operation));
+            }
+        }
+
         f(session).map_err(|error| ServerError::from(error).with_operation(operation))
     }
 }
@@ -996,8 +1035,15 @@ impl RustAnalyzerMcpServer {
         params: Parameters<WorkspaceRootInput>,
     ) -> Result<Json<MutatingToolResult<()>>, ErrorData> {
         let workspace_root = params.0.workspace_root;
+        let loading_timeout = self
+            .state
+            .workspace_session_config()
+            .map(|c| c.workspace_loading_timeout)
+            .unwrap_or(DEFAULT_WORKSPACE_LOADING_TIMEOUT);
         self.with_workspace_session_blocking(workspace_root, "reload_workspace", move |session| {
-            session.reload_workspace()
+            session.reload_workspace()?;
+            session.wait_until_loaded(loading_timeout);
+            Ok(())
         })
         .await?;
 
@@ -1024,10 +1070,19 @@ impl RustAnalyzerMcpServer {
         params: Parameters<WorkspaceRootInput>,
     ) -> Result<Json<MutatingToolResult<()>>, ErrorData> {
         let workspace_root = params.0.workspace_root;
+        let loading_timeout = self
+            .state
+            .workspace_session_config()
+            .map(|c| c.workspace_loading_timeout)
+            .unwrap_or(DEFAULT_WORKSPACE_LOADING_TIMEOUT);
         self.with_workspace_session_blocking(
             workspace_root,
             "rebuild_proc_macros",
-            move |session| session.rebuild_proc_macros(),
+            move |session| {
+                session.rebuild_proc_macros()?;
+                session.wait_until_loaded(loading_timeout);
+                Ok(())
+            },
         )
         .await?;
 

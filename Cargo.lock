@@ -439,6 +439,7 @@ dependencies = [
  "lsp-types",
  "rmcp",
  "rmcp-macros",
+ "rust-lsp-plugin",
  "schemars",
  "serde",
  "serde_json",

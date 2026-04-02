@@ -9,10 +9,10 @@ path = "src/bin/main.rs"
 [[bin]]
 name = "mock_rust_analyzer"
 path = "src/bin/mock_rust_analyzer.rs"
-required-features = ["_test-support"]
+required-features = ["e2e-test"]
 
 [features]
-_test-support = []
+e2e-test = []
 
 [dependencies]
 lsp-server = "0.7.9"
@@ -24,3 +24,6 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
+
+[dev-dependencies]
+rust-lsp-plugin = { path = ".", features = ["e2e-test"] }
